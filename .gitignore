@@ -1,0 +1,19 @@
+# Rust build artifacts
+scripts/rust/target/
+
+# Python virtualenv and cache
+scripts/.venv/
+scripts/__pycache__/
+**/__pycache__/
+*.pyc
+
+# Research output files (may contain API responses with sensitive data)
+scripts/*_raw.json
+scripts/*_fetched.md
+scripts/*_vectors.jsonl
+
+# Go binary
+scripts/go/research
+
+# Editor
+.DS_Store
