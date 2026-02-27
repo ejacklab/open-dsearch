@@ -139,7 +139,7 @@ fn search_xai(query: &str, limit: usize) -> Result<Vec<SearchResult>, String> {
     let script_arg = if script_path.exists() {
         "xai_search.py"
     } else {
-        "scripts/scripts/xai_search.py"
+        ".agents/skills/dsearch/scripts/xai_search.py"
     };
 
     let output = std::process::Command::new("python3")

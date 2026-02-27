@@ -127,13 +127,13 @@ export XAI_API_KEY=your_xai_api_key_here
 
 ### Step 2: Build
 ```bash
-cd scripts/scripts/rust
+cd .agents/skills/dsearch/scripts/rust
 cargo build --release
 ```
 
 ### Step 3: Run
 ```bash
-cd scripts/scripts
+cd .agents/skills/dsearch/scripts
 ./rust/target/release/research --topic "Rust async" --mode vectors
 ```
 

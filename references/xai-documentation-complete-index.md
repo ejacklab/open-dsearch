@@ -170,7 +170,7 @@ This comprehensive documentation suite covers the **xAI (Grok) integration** for
 ## 📁 File Organization
 
 ```
-scripts/references/
+.agents/skills/dsearch/references/
 │
 ├── 📖 Core Documentation (7 files)
 │   ├── xai-at-a-glance.md                      ← START HERE (Overview)
@@ -371,7 +371,7 @@ scripts/references/
 export XAI_API_KEY=your_xai_api_key_here
 
 # 2. Build
-cd scripts/scripts/rust
+cd .agents/skills/dsearch/scripts/rust
 cargo build --release
 
 # 3. Run research

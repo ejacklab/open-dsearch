@@ -241,7 +241,7 @@ pub async fn search_xai_with_params(
     let script_arg = if script_path.exists() {
         "xai_search.py"
     } else {
-        "scripts/scripts/xai_search.py"
+        ".agents/skills/dsearch/scripts/xai_search.py"
     };
 
     let mut cmd_args = vec![
@@ -298,7 +298,7 @@ pub async fn xai_x_search_with_params(
     let script_arg = if script_path.exists() {
         "xai_search.py"
     } else {
-        "scripts/scripts/xai_search.py"
+        ".agents/skills/dsearch/scripts/xai_search.py"
     };
 
     let mut cmd_args = vec![

@@ -287,11 +287,11 @@ export MINIMAX_API_HOST=https://api.minimax.io
 
 ```bash
 # Build Rust binary (if not already built)
-cd scripts/scripts/rust
+cd .agents/skills/dsearch/scripts/rust
 cargo build --release
 
 # Run research with all providers (including xAI)
-cd scripts/scripts
+cd .agents/skills/dsearch/scripts
 ./rust/target/release/research --topic "Rust async patterns" --mode vectors
 
 # Or use Python wrapper
@@ -486,7 +486,7 @@ unset XAI_API_KEY
 ## 📁 File Structure
 
 ```
-scripts/
+.agents/skills/dsearch/
 ├── references/
 │   ├── xai-integration-design.md          # Original design document
 │   ├── xai-architecture-visual.md          # Visual architecture diagrams
@@ -684,7 +684,7 @@ let script_path = std::path::Path::new("xai_search.py");
 let script_arg = if script_path.exists() {
     "xai_search.py"
 } else {
-    "scripts/scripts/xai_search.py"  // Fallback
+    ".agents/skills/dsearch/scripts/xai_search.py"  // Fallback
 };
 ```
 

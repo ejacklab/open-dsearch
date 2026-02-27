@@ -405,7 +405,7 @@ export MINIMAX_API_HOST=https://api.minimax.io
 ## File Structure
 
 ```
-scripts/
+.agents/skills/dsearch/
 ├── references/
 │   └── xai-integration-design.md  ← This design document
 │
