@@ -1,0 +1,14 @@
+[package]
+name = "pulse-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rust_decimal = "1.23"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "rust_decimal", "chrono"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+axum = "0.7"

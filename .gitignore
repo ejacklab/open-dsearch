@@ -17,3 +17,6 @@ scripts/go/research
 
 # Editor
 .DS_Store
+
+# Local agent workspace symlink (points to ~/.agents — machine-specific)
+.agents
