@@ -23,6 +23,10 @@ path = "src/synthesize.rs"
 name = "research"
 path = "src/research.rs"
 
+[[bin]]
+name = "kimi_poc"
+path = "src/kimi_poc.rs"
+
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
 scraper = "0.22"
@@ -36,6 +40,7 @@ urlencoding = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 futures = "0.3"
 chrono = "0.4"
+lazy_static = "1.4"
 
 [[example]]
 name = "benchmark_gemini"

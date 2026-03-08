@@ -1,336 +1,307 @@
-use chrono::Local;
 use clap::Parser;
 use futures::future::join_all;
 use reqwest::Client;
 use std::time::Instant;
-
-use dsearch::{
-    expand_queries, expand_queries_with_sources, fetch_url, score_and_rank, SearchResult,
-};
+use dsearch::{score_and_rank, SearchResult};
 
 #[derive(Parser)]
-#[command(name = "research")]
-#[command(about = "Autonomous research pipeline - search, fetch, and synthesize in one command")]
 struct Args {
-    #[arg(short, long)]
-    topic: String,
-
-    #[arg(short, long, default_value = "5")]
-    queries: usize,
-
-    #[arg(short, long, default_value = "5")]
-    top: usize,
-
-    #[arg(long, default_value = "100")]
-    max_kb: usize,
-
-    #[arg(short, long)]
-    output: Option<String>,
-
-    #[arg(short, long)]
-    urls: Option<Vec<String>>,
-    
-    // Source-specific search flags
-    #[arg(long, default_value = "8")]
-    google: usize,
-    
-    #[arg(long, default_value = "6")]
-    github: usize,
-    
-    #[arg(long, default_value = "6")]
-    official: usize,
-
-    #[arg(long, default_value = "300")]
-    timeout: usize,
-
-    #[arg(long, default_value = "vectors", value_parser = ["vectors", "json", "md"])]
-    mode: String,
+    #[arg(short, long)] topic: String,
+    #[arg(short = 'n', long, default_value = "5")] top: usize,
+    #[arg(long, default_value = "100")] max_kb: usize,
+    #[arg(short, long)] output: Option<String>,
+    #[arg(short, long)] urls: Option<Vec<String>>,
+    #[arg(short = 'q', long = "query")] queries: Option<Vec<String>>,
+    #[arg(long, default_value = "300")] timeout: usize,
+    #[arg(short, long, default_value = "vectors", value_parser = ["vectors", "json", "md"])] mode: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let args = Args::parse();
     let start = Instant::now();
+    println!("🔬 CCLL Autonomous Research Pipeline\n{}\nTopic: {}\n", "=".repeat(50), args.topic);
 
-    println!("🔬 CCLL Autonomous Research Pipeline");
-    println!("{}", "=".repeat(50));
-    println!("Topic: {}", args.topic);
-    println!();
-
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let query_terms: Vec<String> = args
-        .topic
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-
-    println!("Phase 1: Expanding queries...");
-    let queries = expand_queries_with_sources(
-        &args.topic,
-        args.google,
-        args.github,
-        args.official,
-    );
-    let queries: Vec<String> = queries.into_iter().take(args.queries * 20).collect();
-    println!("  Running {} search variations", queries.len());
-    println!("  - {} Google", args.google);
-    println!("   - {} GitHub", args.github);
-    println!("   - {} Official", args.official);
-
-    let gemini_key = std::env::var("GEMINI_API_KEY").is_ok();
-    let minimax_key = std::env::var("MINIMAX_API_KEY").is_ok();
-
-    let mut all_results: Vec<SearchResult> = Vec::new();
-
-    // Phase 2a: Search via Gemini (20 queries)
-    if gemini_key {
-        println!("\nPhase 2a: Gemini search ({} queries)...", queries.len());
-        let search_futures: Vec<_> = queries
-            .iter()
-            .map(|q| {
-                let client = &client;
-                let q = q.clone();
-                async move {
-                    let _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    dsearch::search_gemini(&client, &q, 10).await
-                }
-            })
-            .collect();
-
-        let search_results: Vec<Result<Vec<SearchResult>, String>> = join_all(search_futures).await;
-
-        for result in search_results {
-            match result {
-                Ok(results) => {
-                    // Push to zvec in background (non-blocking)
-                    for r in &results {
-                        let _ = std::process::Command::new("python3")
-                            .args(&["push_zvec.py", &r.title, &r.url, &r.snippet, &args.topic])
-                            .spawn();
-                    }
-                    all_results.extend(results);
-                }
-                Err(e) => eprintln!("  Gemini error: {}", e),
-            }
-        }
-        println!("  Gemini found {} results", all_results.len());
-    }
-
-    // Phase 2b: Search via MiniMax (20 queries)
-    if minimax_key {
-        println!("\nPhase 2b: MiniMax search ({} queries)...", queries.len());
-        let search_futures: Vec<_> = queries
-            .iter()
-            .map(|q| {
-                let client = &client;
-                let q = q.clone();
-                async move {
-                    let _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    dsearch::search_minimax(&client, &q, 10).await
-                }
-            })
-            .collect();
-
-        let search_results: Vec<Result<Vec<SearchResult>, String>> = join_all(search_futures).await;
-
-        for result in search_results {
-            match result {
-                Ok(results) => {
-                    // Push to zvec in background (non-blocking)
-                    for r in &results {
-                        let _ = std::process::Command::new("python3")
-                            .args(&["push_zvec.py", &r.title, &r.url, &r.snippet, &args.topic])
-                            .spawn();
-                    }
-                    all_results.extend(results);
-                }
-                Err(e) => eprintln!("  MiniMax error: {}", e),
-            }
-        }
-        println!("  MiniMax found {} results", all_results.len());
-    }
-
-    let xai_key = std::env::var("XAI_API_KEY").is_ok();
-
-    // Phase 2c: Search via xAI web search (20 queries)
-    if xai_key {
-        println!("\nPhase 2c: xAI web search ({} queries)...", queries.len());
-        let search_futures: Vec<_> = queries
-            .iter()
-            .map(|q| {
-                let q = q.clone();
-                async move {
-                    let _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    dsearch::search_xai(&q, 10).await
-                }
-            })
-            .collect();
-
-        let search_results: Vec<Result<Vec<SearchResult>, String>> = join_all(search_futures).await;
-
-        let mut xai_results = 0;
-        for result in search_results {
-            match result {
-                Ok(results) => {
-                    // Push to zvec in background (non-blocking)
-                    for r in &results {
-                        let _ = std::process::Command::new("python3")
-                            .args(&["push_zvec.py", &r.title, &r.url, &r.snippet, &args.topic])
-                            .spawn();
-                    }
-                    xai_results += results.len();
-                    all_results.extend(results);
-                }
-                Err(e) => eprintln!("  xAI error: {}", e),
-            }
-        }
-        println!("  xAI web search found {} results", xai_results);
-    }
-
-    // Phase 2d: Search via xAI X search (20 queries)
-    if xai_key {
-        println!("\nPhase 2d: xAI X search ({} queries)...", queries.len());
-        let search_futures: Vec<_> = queries
-            .iter()
-            .map(|q| {
-                let q = q.clone();
-                async move {
-                    let _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    dsearch::xai_x_search(&q, 10).await
-                }
-            })
-            .collect();
-
-        let search_results: Vec<Result<Vec<SearchResult>, String>> = join_all(search_futures).await;
-
-        let mut x_results = 0;
-        for result in search_results {
-            match result {
-                Ok(results) => {
-                    // Push to zvec in background (non-blocking)
-                    for r in &results {
-                        let _ = std::process::Command::new("python3")
-                            .args(&["push_zvec.py", &r.title, &r.url, &r.snippet, &args.topic])
-                            .spawn();
-                    }
-                    x_results += results.len();
-                    all_results.extend(results);
-                }
-                Err(e) => eprintln!("  xAI X search error: {}", e),
-            }
-        }
-        println!("  xAI X search found {} results", x_results);
-    }
+    let client = Client::builder().user_agent("Mozilla/5.0").timeout(std::time::Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
+    let queries = args.queries.clone().unwrap_or_else(|| vec![args.topic.clone()]);
+    println!("[dsearch] topic   : {:?}", args.topic);
+    println!("[dsearch] queries : {:?}", queries);
+    println!("[dsearch] count   : {}", queries.len());
+    
+    let mut all_results = Vec::new();
+    all_results.extend(run_gemini_phase(&client, &queries, &args.topic).await);
+    all_results.extend(run_minimax_phase(&client, &queries, &args.topic).await);
+    all_results.extend(run_kimi_phase(&client, &queries, &args.topic).await);
+    // xAI disabled - uncomment to re-enable: all_results.extend(run_xai_phases(&queries, &args.topic).await);
 
     if let Some(urls) = &args.urls {
-        for url in urls {
-            all_results.push(SearchResult {
-                title: format!("User-provided: {}", url),
-                url: url.clone(),
-                snippet: "User-specified URL for research".to_string(),
-            });
-        }
-    }
-
-    if all_results.is_empty() {
-        eprintln!("\n⚠️  No search results found. This may be due to:");
-        eprintln!("   - Missing API keys (GEMINI_API_KEY or MINIMAX_API_KEY)");
-        eprintln!("   - Rate limiting");
-        eprintln!("\nOptions:");
-        eprintln!("   1. Set GEMINI_API_KEY (free: https://aistudio.google.com/apikey)");
-        eprintln!("   2. Use --urls to specify URLs directly");
-        eprintln!("   3. Try again later if rate limited");
+        for url in urls { all_results.push(SearchResult { title: format!("User: {}", url), url: url.clone(), snippet: "User URL".to_string() }); }
     }
 
     println!("  Found {} total results", all_results.len());
-
-    // Handle based on mode
     match args.mode.as_str() {
-        "json" => {
-            // Just save raw JSON
-            let raw_results_file = format!("{}_raw.json", args.topic.replace(" ", "_"));
-            let raw_json = serde_json::to_string_pretty(&all_results).unwrap_or_default();
-            std::fs::write(&raw_results_file, &raw_json).ok();
-            println!("  ✓ Saved to: {}", raw_results_file);
-        }
-        "vectors" => {
-            // Already pushed to zvec during search (background)
-            // Just save small index
-            let index_file = format!("{}_index.json", args.topic.replace(" ", "_"));
-            let index: Vec<_> = all_results.iter().map(|r| serde_json::json!({"title": r.title, "url": r.url})).collect();
-            std::fs::write(&index_file, serde_json::to_string_pretty(&index).unwrap()).ok();
-            println!("  ✓ Vectors pushed to zvec (background)");
-            println!("  ✓ Index saved to: {}", index_file);
-        }
-        "md" | _ => {
-            // Default: Full MD report (existing logic)
-            let raw_results_file = format!("{}_raw.json", args.topic.replace(" ", "_"));
-            let raw_json = serde_json::to_string_pretty(&all_results).unwrap_or_default();
-            std::fs::write(&raw_results_file, &raw_json).ok();
-            println!("  Raw results saved to: {}", raw_results_file);
-
-            println!("\nPhase 3: Ranking & deduplication...");
-            let scored = score_and_rank(all_results.clone(), args.top, &query_terms);
-            println!("  Selected top {} sources for detailed fetching", scored.len());
-
-            // Create file to append fetched content
-            let fetched_file = format!("{}_fetched.md", args.topic.replace(" ", "_"));
-            std::fs::write(&fetched_file, format!("# Research: {}\n\n", args.topic)).ok();
-            println!("\nPhase 4: Fetching content... (appending to {})", fetched_file);
-
-            // Fetch with streaming - append each result as it completes
-            for (i, s) in scored.iter().enumerate() {
-                let client = &client;
-                let url = s.result.url.clone();
-                let max_kb = args.max_kb;
-                
-                match fetch_url(client, &url, max_kb).await {
-                    Ok(page) => {
-                        let content = format!(
-                            "\n\n## Source {}: {}\n**URL:** {}\n\n{}\n",
-                            i + 1,
-                            page.title,
-                            page.url,
-                            page.markdown
-                        );
-                        std::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&fetched_file)
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, content.as_bytes()))
-                            .ok();
-                        println!("  ✓ Fetched: {}", page.title.chars().take(50).collect::<String>());
-                    }
-                    Err(e) => {
-                        let error_msg = format!("\n\n## Source {}: FAILED\n**URL:** {}\n**Error:** {}\n", i + 1, url, e);
-                        std::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&fetched_file)
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, error_msg.as_bytes()))
-                            .ok();
-                        eprintln!("  ✗ Failed: {}", url);
-                    }
-                }
-            }
-
-            println!("  All content appended to: {}", fetched_file);
-
-            let elapsed = start.elapsed();
-            let summary = format!(
-                "Research: {}\nResults: {}\nFile: {}\nTime: {:.1}s",
-                args.topic,
-                all_results.len(),
-                fetched_file,
-                elapsed.as_secs_f64()
-            );
-
-            println!("\n{}", summary);
-        }
+        "json" => save_json(&all_results, &args.topic),
+        "vectors" => save_vectors(&all_results, &args.topic),
+        _ => run_md_report_phase(&client, all_results, &args).await?,
     }
 
+    println!("\nResearch: {}\nTime: {:.1}s", args.topic, start.elapsed().as_secs_f64());
     Ok(())
+}
+
+async fn run_gemini_phase(client: &Client, queries: &[String], topic: &str) -> Vec<SearchResult> {
+    if dsearch::get_secret("gemini").is_err() { return Vec::new(); }
+    println!("\nPhase: Gemini ({} queries)...", queries.len());
+    for (i, q) in queries.iter().enumerate() {
+        println!("[gemini] query {}: {:?}", i + 1, q);
+    }
+    let mut results = Vec::new();
+    let futs: Vec<_> = queries.iter().map(|q| { let c = client; let q = q.clone(); async move { dsearch::search_gemini(c, &q, 10).await } }).collect();
+    for res in join_all(futs).await { if let Ok(list) = res { results.extend(list); } }
+    for r in &results { push_zvec(r, topic); }
+    println!("  Gemini found {} results", results.len());
+    results
+}
+
+async fn run_minimax_phase(client: &Client, queries: &[String], topic: &str) -> Vec<SearchResult> {
+    if dsearch::get_secret("minimax").is_err() { return Vec::new(); }
+    println!("\nPhase: MiniMax ({} queries)...", queries.len());
+    for (i, q) in queries.iter().enumerate() {
+        println!("[minimax] query {}: {:?}", i + 1, q);
+    }
+    let mut results = Vec::new();
+    let futs: Vec<_> = queries.iter().map(|q| { let c = client; let q = q.clone(); async move { dsearch::search_minimax(c, &q, 10).await } }).collect();
+    for res in join_all(futs).await { if let Ok(list) = res { results.extend(list); } }
+    for r in &results { push_zvec(r, topic); }
+    println!("  MiniMax found {} results", results.len());
+    results
+}
+
+async fn run_kimi_phase(client: &Client, queries: &[String], topic: &str) -> Vec<SearchResult> {
+    if dsearch::get_secret("kimi").is_err() { return Vec::new(); }
+    println!("\nPhase: Kimi ({} queries)...", queries.len());
+    for (i, q) in queries.iter().enumerate() {
+        println!("[kimi] query {}: {:?}", i + 1, q);
+    }
+    let mut results = Vec::new();
+    let futs: Vec<_> = queries.iter().map(|q| { let c = client; let q = q.clone(); async move { dsearch::search_kimi(c, &q, 10).await } }).collect();
+    for res in join_all(futs).await { if let Ok(list) = res { results.extend(list); } }
+    for r in &results { push_zvec(r, topic); }
+    println!("  Kimi found {} results", results.len());
+    results
+}
+
+async fn run_xai_phases(queries: &[String], topic: &str) -> Vec<SearchResult> {
+    if dsearch::get_secret("xai").is_err() { return Vec::new(); }
+    let mut all = Vec::new();
+    println!("\nPhase: xAI Web ({} queries)...", queries.len());
+    for (i, q) in queries.iter().enumerate() {
+        println!("[xai] query {}: {:?}", i + 1, q);
+    }
+    let futs: Vec<_> = queries.iter().map(|q| { let q = q.clone(); async move { dsearch::search_xai(&q, 10).await } }).collect();
+    for res in join_all(futs).await { if let Ok(list) = res { all.extend(list); } }
+    println!("\nPhase: xAI X ({} queries)...", queries.len());
+    let futs: Vec<_> = queries.iter().map(|q| { let q = q.clone(); async move { dsearch::xai_x_search(&q, 10).await } }).collect();
+    for res in join_all(futs).await { if let Ok(list) = res { all.extend(list); } }
+    for r in &all { push_zvec(r, topic); }
+    println!("  xAI found {} results", all.len());
+    all
+}
+
+fn push_zvec(r: &SearchResult, topic: &str) {
+    let _ = std::process::Command::new("python3").args(&["push_zvec.py", &r.title, &r.url, &r.snippet, topic]).spawn();
+}
+
+fn save_json(results: &[SearchResult], topic: &str) {
+    let file = format!("{}_raw.json", topic.replace(" ", "_"));
+    std::fs::write(&file, serde_json::to_string_pretty(results).unwrap_or_default()).ok();
+    println!("  ✓ Saved to: {}", file);
+}
+
+fn save_vectors(results: &[SearchResult], topic: &str) {
+    let file = format!("{}_index.json", topic.replace(" ", "_"));
+    let index: Vec<_> = results.iter().map(|r| serde_json::json!({"title": r.title, "url": r.url})).collect();
+    std::fs::write(&file, serde_json::to_string_pretty(&index).unwrap()).ok();
+    println!("  ✓ Index saved to: {}", file);
+}
+
+async fn run_md_report_phase(client: &Client, results: Vec<SearchResult>, args: &Args) -> Result<(), String> {
+    save_json(&results, &args.topic);
+    let scored = score_and_rank(results, args.top, &args.topic.split_whitespace().map(|s| s.to_string()).collect::<Vec<_>>());
+    let file = format!("{}_fetched.md", args.topic.replace(" ", "_"));
+    std::fs::write(&file, format!("# Research: {}\n\n", args.topic)).ok();
+    for (i, s) in scored.iter().enumerate() {
+        let page = match dsearch::fetch_url(client, &s.result.url, args.max_kb).await {
+            Ok(p) => p,
+            Err(_) => dsearch::FetchedPage {
+                url: s.result.url.clone(), title: s.result.title.clone(), markdown: "Fetch failed".into(), byte_size: 0,
+            },
+        };
+        let content = format!("\n\n## Source {}: {}\n**URL:** {}\n\n{}\n", i + 1, page.title, page.url, page.markdown);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&file).map_err(|e| e.to_string())?;
+        use std::io::Write; f.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+        println!("  ✓ Fetched: {}", page.title.chars().take(50).collect::<String>());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Args, clap::Error> {
+        Args::try_parse_from(std::iter::once("research").chain(args.iter().copied()))
+    }
+
+    // --- Topic parsing ---
+
+    #[test]
+    fn test_topic_received_verbatim() {
+        let args = parse(&["--topic", "kube-scheduler MIG GPU bin-packing"]).unwrap();
+        println!("[test] topic parsed: {:?}", args.topic);
+        assert_eq!(args.topic, "kube-scheduler MIG GPU bin-packing");
+    }
+
+    #[test]
+    fn test_topic_dense_keyword_string_unchanged() {
+        let topic = "MoE routing Top-k expert-choice DeepSeek-V3 expert parallelism";
+        let args = parse(&["--topic", topic]).unwrap();
+        println!("[test] topic parsed: {:?}", args.topic);
+        assert_eq!(args.topic, topic);
+    }
+
+    #[test]
+    fn test_topic_becomes_single_query() {
+        let args = parse(&["--topic", "Rust async runtime Tokio work-stealing"]).unwrap();
+        let queries = vec![args.topic.clone()];
+        println!("[test] queries vec: {:?}", queries);
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0], "Rust async runtime Tokio work-stealing");
+    }
+
+    #[test]
+    fn test_dsearch_scope_query() {
+        // Real scope from 3-round clarification:
+        //   Round 1: async runtime design + production LLM serving patterns
+        //   Round 2: Tokio vs Rayon, dynamic batching strategies
+        //   Round 3 Q2: dynamic batching patterns for GPU utilization without sacrificing latency
+        //   Round 3 Q3: Rayon work-stealing vs spawn_blocking for CPU-bound matrix ops 2026
+        let query = "Tokio Rayon inference dynamic batching GPU utilization latency spawn_blocking work-stealing CPU-bound matrix ops 2026 Rust LLM";
+        let args = parse(&["--topic", query, "--top", "8", "--mode", "md"]).unwrap();
+        println!("[test] topic  : {:?}", args.topic);
+        println!("[test] top    : {}", args.top);
+        println!("[test] mode   : {:?}", args.mode);
+        let queries = vec![args.topic.clone()];
+        println!("[test] queries: {:?}", queries);
+        assert_eq!(args.topic, query);
+        assert_eq!(args.top, 8);
+        assert_eq!(args.mode, "md");
+        // single query vec — no expansion
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0], query);
+    }
+
+    #[test]
+    fn test_missing_topic_fails() {
+        assert!(parse(&["--mode", "md"]).is_err());
+    }
+
+    // --- Default values ---
+
+    #[test]
+    fn test_defaults() {
+        let args = parse(&["--topic", "anything"]).unwrap();
+        assert_eq!(args.top, 5);
+        assert_eq!(args.timeout, 300);
+        assert_eq!(args.mode, "vectors");
+        assert_eq!(args.max_kb, 100);
+        assert!(args.output.is_none());
+        assert!(args.urls.is_none());
+    }
+
+    // --- Flag overrides ---
+
+    #[test]
+    fn test_top_override() {
+        let args = parse(&["--topic", "anything", "--top", "10"]).unwrap();
+        assert_eq!(args.top, 10);
+    }
+
+    #[test]
+    fn test_mode_md() {
+        let args = parse(&["--topic", "anything", "--mode", "md"]).unwrap();
+        assert_eq!(args.mode, "md");
+    }
+
+    #[test]
+    fn test_mode_json() {
+        let args = parse(&["--topic", "anything", "--mode", "json"]).unwrap();
+        assert_eq!(args.mode, "json");
+    }
+
+    #[test]
+    fn test_invalid_mode_rejected() {
+        assert!(parse(&["--topic", "anything", "--mode", "xml"]).is_err());
+    }
+
+    #[test]
+    fn test_urls_parsed() {
+        let args = parse(&["--topic", "anything", "--urls", "https://tokio.rs", "--urls", "https://docs.rs"]).unwrap();
+        let urls = args.urls.unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"https://tokio.rs".to_string()));
+    }
+
+    // --- Multi-query design (new) ---
+
+    #[test]
+    fn test_multiple_queries_parsed() {
+        let args = parse(&[
+            "--topic", "Rust parallel LLM 2026",
+            "--query", "Tokio vs Rayon LLM inference Rust 2026",
+            "--query", "dynamic batching GPU utilization Rust LLM serving latency",
+            "--query", "Rayon work-stealing spawn_blocking CPU matrix ops Rust",
+        ]).unwrap();
+        let queries = args.queries.unwrap();
+        println!("[test] queries ({}):", queries.len());
+        for q in &queries { println!("  → {:?}", q); }
+        assert_eq!(queries.len(), 3);
+        assert!(queries.contains(&"Tokio vs Rayon LLM inference Rust 2026".to_string()));
+        assert!(queries.contains(&"dynamic batching GPU utilization Rust LLM serving latency".to_string()));
+    }
+
+    #[test]
+    fn test_topic_separate_from_queries() {
+        let args = parse(&[
+            "--topic", "Rust parallel LLM 2026",
+            "--query", "Tokio vs Rayon LLM inference Rust 2026",
+        ]).unwrap();
+        println!("[test] topic  : {:?}", args.topic);
+        println!("[test] queries: {:?}", args.queries);
+        assert_eq!(args.topic, "Rust parallel LLM 2026");
+        let queries = args.queries.unwrap();
+        assert!(!queries.contains(&"Rust parallel LLM 2026".to_string()));
+    }
+
+    #[test]
+    fn test_queries_vec_has_all_focused_queries() {
+        // Real session scope from 3-round clarification
+        let args = parse(&[
+            "--topic", "Rust parallel LLM 2026",
+            "--query", "Tokio vs Rayon LLM inference Rust 2026",
+            "--query", "dynamic batching GPU utilization Rust LLM serving latency",
+            "--query", "Rayon work-stealing spawn_blocking CPU matrix ops Rust",
+            "--top", "8",
+            "--mode", "md",
+        ]).unwrap();
+        let queries = args.queries.unwrap();
+        println!("[test] topic  : {:?}", args.topic);
+        println!("[test] top    : {}", args.top);
+        println!("[test] mode   : {:?}", args.mode);
+        println!("[test] queries ({}):", queries.len());
+        for q in &queries { println!("  → {:?}", q); }
+        assert_eq!(queries.len(), 3);
+        assert_eq!(args.top, 8);
+        assert_eq!(args.mode, "md");
+    }
 }
