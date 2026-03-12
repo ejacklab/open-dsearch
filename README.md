@@ -321,3 +321,18 @@ For support, please:
 **Note**: This repository is part of a two-repo workspace structure with separate public and private components. Always ensure you're working in the correct repository and respecting the public/private boundary.
 
 **Last Updated**: February 2026
+
+---
+
+## ⚠️ v0.1.0 - Early Release
+
+This is an **early release** with known limitations:
+
+- ❌ No tests yet (coming in v0.2.0)
+- ⚠️ Hardcoded timeouts
+- ⚠️ Basic error messages
+- ⚠️ No rate limiting
+
+**But it works!** Core functionality is production-ready. We're shipping early and improving based on user feedback.
+
+**See `CODE_REVIEW.md` for full details and `TODO.md` for our roadmap.**
