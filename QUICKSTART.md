@@ -84,7 +84,46 @@ python3 scripts/research.py "AI agents 2026" --mode md --top 5
 
 ---
 
-## 📖 Usage
+## 🚀 Usage Methods
+
+### Method 1: CLI (Command Line)
+
+```bash
+# Markdown report (default)
+python3 scripts/research.py "your topic" --mode md
+
+# JSON output (for programs)
+python3 scripts/research.py "your topic" --mode json
+
+# Vector storage (for RAG)
+python3 scripts/research.py "your topic" --mode vectors
+```
+
+### Method 2: REST API
+
+```bash
+# Start API server
+cd scripts
+uvicorn api_server:app --reload --port 8000
+
+# Then call it
+curl -X POST http://localhost:8000/research \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "AI agents", "top": 5, "mode": "md"}'
+
+# Or visit interactive docs
+open http://localhost:8000/docs
+```
+
+**API Benefits:**
+- ✅ Web-accessible
+- ✅ Easy to integrate
+- ✅ Interactive documentation
+- ✅ Can deploy to cloud
+
+---
+
+## 📖 CLI Usage
 
 ### Basic Research
 
