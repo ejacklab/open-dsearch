@@ -40,8 +40,8 @@ def research(
         topic,
         "--top",
         str(top),
-        "--queries",
-        str(queries),
+        "--query",
+        str(queries),  # Changed from --queries to --query
         "--timeout",
         str(timeout),
         "--mode",
