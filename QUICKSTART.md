@@ -1,5 +1,22 @@
 # open-dsearch - Quick Start Guide
 
+## ⚠️ API Keys Required
+
+**You must provide your own API keys.** At least one is required:
+
+- **Gemini** (FREE: 1000 requests/day) - Recommended for testing
+- **MiniMax** (Paid)
+- **Kimi/Moonshot** (Paid)
+- **xAI/Grok** (Paid)
+
+**Get your keys:**
+- **Gemini (FREE)**: https://aistudio.google.com/app/apikey
+- **MiniMax**: https://www.minimax.io
+- **Kimi**: https://platform.moonshot.cn
+- **xAI**: https://console.x.ai
+
+---
+
 ## 🚀 Installation
 
 ### Prerequisites
