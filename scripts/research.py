@@ -17,6 +17,15 @@ def get_rust_binary():
     return binary if binary.exists() else None
 
 
+def validate_topic(topic: str) -> tuple[bool, str]:
+    """Validate research topic. Returns (is_valid, error_message)."""
+    if not topic or not topic.strip():
+        return False, "Topic cannot be empty"
+    if len(topic) > 500:
+        return False, "Topic too long (max 500 characters)"
+    return True, ""
+
+
 def research(
     topic: str,
     top: int = 5,
@@ -26,13 +35,31 @@ def research(
     timeout: int = 300,
     mode: str = "vectors",
 ):
+    # Validate inputs
+    is_valid, error = validate_topic(topic)
+    if not is_valid:
+        print(f"Error: {error}", file=sys.stderr)
+        return None
+    
+    if top < 1 or top > 50:
+        print("Error: --top must be between 1 and 50", file=sys.stderr)
+        return None
+    
+    if queries < 1 or queries > 20:
+        print("Error: --queries must be between 1 and 20", file=sys.stderr)
+        return None
+
     binary = get_rust_binary()
     if not binary:
-        print(
-            "Error: Rust binary not found. Build with: cd rust && cargo build --release",
-            file=sys.stderr,
-        )
-        return None
+        # Fallback to pure-Python implementation
+        print("[dsearch] Rust binary not found, using Python fallback...", file=sys.stderr)
+        try:
+            from research_python import research as python_research
+            return python_research(topic, top, queries, urls, output, timeout, mode)
+        except ImportError as e:
+            print(f"Error: Rust binary not found and Python fallback failed: {e}", file=sys.stderr)
+            print("Build Rust with: cd rust && cargo build --release", file=sys.stderr)
+            return None
 
     cmd = [
         str(binary),
@@ -40,13 +67,15 @@ def research(
         topic,
         "--top",
         str(top),
-        "--query",
-        str(queries),  # Changed from --queries to --query
         "--timeout",
         str(timeout),
         "--mode",
         mode,
     ]
+    
+    # Add multiple query arguments if specified
+    for i in range(queries):
+        cmd.extend(["--query", topic])
 
     if urls:
         for url in urls:
