@@ -18,8 +18,8 @@ class DedupConfig:
     ignore_query_params: Optional[List[str]] = None
     
     # Content-based dedup
-    content_similarity_threshold: float = 0.85
-    min_content_length: int = 50
+    content_similarity_threshold: float = 0.5
+    min_content_length: int = 20
     
     # Domain limits
     max_per_domain: int = 3
@@ -170,7 +170,7 @@ class Deduplicator:
             
             for existing in unique_results:
                 similarity = self._content_similarity(result, existing)
-                if similarity >= self.config.content_similarity_threshold:
+                if similarity > self.config.content_similarity_threshold:
                     is_duplicate = True
                     break
             
@@ -250,7 +250,7 @@ class Deduplicator:
             to_remove = []
             for i, other in enumerate(remaining):
                 similarity = self._content_similarity(current, other)
-                if similarity >= self.config.content_similarity_threshold:
+                if similarity > self.config.content_similarity_threshold:
                     group.append(other)
                     to_remove.append(i)
             

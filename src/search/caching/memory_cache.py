@@ -89,7 +89,7 @@ class MemoryCache(CacheBackend):
         ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
         entry = CacheEntry(
             results=results,
-            expires_at=time.time() + ttl
+            expires_at=time.time() + ttl if ttl_seconds != 0 else time.time()  # ttl=0 = immediate expiry
         )
         
         self._cache[key_str] = entry

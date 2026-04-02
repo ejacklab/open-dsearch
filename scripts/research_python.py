@@ -376,14 +376,14 @@ def verify_urls(results: List[SearchResult], timeout: int = 10, max_workers: int
     return verified
 
 
-def score_and_rank(results: List[SearchResult], top: int, keywords: List[str]) -> List[SearchResult]:
+def score_and_rank(results: List[SearchResult], top_n: int, query_terms: List[str]) -> List[SearchResult]:
     """Score and rank search results."""
     for r in results:
         score = 0.0
         text = (r.title + " " + r.snippet).lower()
 
         # Keyword matching
-        for kw in keywords:
+        for kw in query_terms:
             if kw.lower() in text:
                 score += 1.0
 
@@ -409,7 +409,7 @@ def score_and_rank(results: List[SearchResult], top: int, keywords: List[str]) -
             seen_urls.add(r.url)
             ranked.append(r)
 
-    return ranked[:top]
+    return ranked[:top_n]
 
 
 def research(
@@ -508,7 +508,7 @@ def research(
     print(f"  Found {len(all_results)} total results")
 
     # Rank and dedupe
-    ranked = score_and_rank(all_results, top, keywords)
+    ranked = score_and_rank(all_results, top_n=top, query_terms=keywords)
 
     # Verify URLs are reachable (filters hallucinated links)
     if verify:

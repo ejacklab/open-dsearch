@@ -47,16 +47,23 @@ class SQLiteCache(CacheBackend):
                     data TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL,
-                    access_count INTEGER DEFAULT 0
+                    access_count INTEGER DEFAULT 0,
+                    original_query TEXT
                 )
             """)
-            
+
             # Create index for expiration queries
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_expires 
+                CREATE INDEX IF NOT EXISTS idx_expires
                 ON cache(expires_at)
             """)
-            
+
+            # Create index for pattern-based invalidation
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_original_query
+                ON cache(original_query)
+            """)
+
             conn.commit()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -127,18 +134,22 @@ class SQLiteCache(CacheBackend):
         key_str = key.to_string()
         ttl = ttl_seconds if ttl_seconds > 0 else self.default_ttl
         
+        # Store original query for pattern-based invalidation
+        original_query = f"{key.query}:{','.join(sorted(key.providers))}"
+
         try:
             with self._get_connection() as conn:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO cache (key, data, created_at, expires_at, access_count)
-                    VALUES (?, ?, ?, ?, 0)
+                    INSERT OR REPLACE INTO cache (key, data, created_at, expires_at, access_count, original_query)
+                    VALUES (?, ?, ?, ?, 0, ?)
                     """,
                     (
                         key_str,
                         self._serialize_results(results),
                         time.time(),
-                        time.time() + ttl
+                        time.time() + ttl,
+                        original_query
                     )
                 )
                 conn.commit()
@@ -161,11 +172,12 @@ class SQLiteCache(CacheBackend):
                     cursor = conn.execute("DELETE FROM cache")
                 else:
                     cursor = conn.execute(
-                        "DELETE FROM cache WHERE key LIKE ?",
+                        "DELETE FROM cache WHERE original_query LIKE ?",
                         (f"%{pattern}%",)
                     )
+                count = cursor.rowcount  # read before commit
                 conn.commit()
-                return cursor.rowcount
+                return count
         except sqlite3.Error:
             return 0
     

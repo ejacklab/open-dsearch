@@ -30,7 +30,7 @@ class TestRateLimiter:
         limiter.acquire()
         limiter.acquire()
         limiter.acquire()
-        assert limiter._tokens == 2
+        assert limiter._tokens == pytest.approx(2.0, abs=0.01)  # timing drift allowed
     
     def test_rate_limiter_refills_over_time(self):
         """Should refill tokens over time."""

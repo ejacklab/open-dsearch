@@ -16,24 +16,24 @@ class ErrorCode(Enum):
     VALIDATION = "E001"
     CONFIGURATION = "E002"
     TIMEOUT = "E003"
-    
+
     # Provider errors
     PROVIDER_ERROR = "E100"
     PROVIDER_UNAVAILABLE = "E101"
     PROVIDER_RATE_LIMITED = "E102"
     PROVIDER_AUTH_ERROR = "E103"
     PROVIDER_QUOTA_EXCEEDED = "E104"
-    
+
     # Search errors
     SEARCH_ERROR = "E200"
     SEARCH_NO_RESULTS = "E201"
     SEARCH_TIMEOUT = "E202"
-    
+
     # Network errors
     NETWORK_ERROR = "E300"
     NETWORK_TIMEOUT = "E301"
     NETWORK_DNS_ERROR = "E302"
-    
+
     # Cache errors
     CACHE_ERROR = "E400"
     CACHE_MISS = "E401"
@@ -42,7 +42,7 @@ class ErrorCode(Enum):
 class DsearchError(Exception):
     """
     Base exception for Open Dsearch.
-    
+
     Attributes:
         message: Error message
         code: Error code
@@ -50,7 +50,7 @@ class DsearchError(Exception):
         retryable: Whether the operation can be retried
         retry_after: Suggested seconds to wait before retry
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -67,7 +67,7 @@ class DsearchError(Exception):
         self.retryable = retryable
         self.retry_after = retry_after
         self.cause = cause
-    
+
     def __str__(self) -> str:
         parts = [f"[{self.code.value}] {self.message}"]
         if self.context:
@@ -77,7 +77,7 @@ class DsearchError(Exception):
         if self.cause:
             parts.append(f"Caused by: {self.cause}")
         return " | ".join(parts)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert error to dictionary for serialization."""
         return {
@@ -92,7 +92,7 @@ class DsearchError(Exception):
 
 class ValidationError(DsearchError):
     """Raised when input validation fails."""
-    
+
     def __init__(
         self,
         message: str,
@@ -118,7 +118,7 @@ class ValidationError(DsearchError):
 
 class ConfigError(DsearchError):
     """Raised when configuration is invalid."""
-    
+
     def __init__(self, message: str, config_key: Optional[str] = None, **kwargs):
         context = kwargs.get("context", {})
         if config_key:
@@ -135,7 +135,7 @@ class ConfigError(DsearchError):
 
 class TimeoutError(DsearchError):
     """Raised when an operation times out."""
-    
+
     def __init__(
         self,
         message: str,
@@ -157,7 +157,7 @@ class TimeoutError(DsearchError):
 
 class ProviderError(DsearchError):
     """Base exception for provider-related errors."""
-    
+
     def __init__(
         self,
         message: str,
@@ -178,7 +178,7 @@ class ProviderError(DsearchError):
 
 class ProviderUnavailableError(ProviderError):
     """Raised when a provider is unavailable."""
-    
+
     def __init__(self, provider: str, **kwargs):
         super().__init__(
             message=f"Provider '{provider}' is unavailable",
@@ -192,7 +192,7 @@ class ProviderUnavailableError(ProviderError):
 
 class ProviderRateLimitError(ProviderError):
     """Raised when a provider rate limits the request."""
-    
+
     def __init__(
         self,
         provider: str,
@@ -202,7 +202,7 @@ class ProviderRateLimitError(ProviderError):
         message = f"Rate limited by provider '{provider}'"
         if retry_after:
             message += f" (retry after {retry_after}s)"
-        
+
         super().__init__(
             message=message,
             provider=provider,
@@ -215,7 +215,7 @@ class ProviderRateLimitError(ProviderError):
 
 class ProviderAuthError(ProviderError):
     """Raised when provider authentication fails."""
-    
+
     def __init__(self, provider: str, **kwargs):
         super().__init__(
             message=f"Authentication failed for provider '{provider}'",
@@ -228,7 +228,7 @@ class ProviderAuthError(ProviderError):
 
 class ProviderQuotaError(ProviderError):
     """Raised when provider quota is exceeded."""
-    
+
     def __init__(self, provider: str, **kwargs):
         super().__init__(
             message=f"Quota exceeded for provider '{provider}'",
@@ -241,7 +241,7 @@ class ProviderQuotaError(ProviderError):
 
 class SearchError(DsearchError):
     """Raised when search operation fails."""
-    
+
     def __init__(
         self,
         message: str,
@@ -263,7 +263,7 @@ class SearchError(DsearchError):
 
 class NoResultsError(SearchError):
     """Raised when search returns no results."""
-    
+
     def __init__(self, query: str, **kwargs):
         super().__init__(
             message=f"No results found for query: {query[:50]}...",
@@ -276,7 +276,7 @@ class NoResultsError(SearchError):
 
 class NetworkError(DsearchError):
     """Raised when network operation fails."""
-    
+
     def __init__(
         self,
         message: str,
@@ -299,7 +299,7 @@ class NetworkError(DsearchError):
 
 class NetworkTimeoutError(NetworkError):
     """Raised when network request times out."""
-    
+
     def __init__(self, url: str, timeout: Optional[float] = None, **kwargs):
         message = f"Network timeout for {url}"
         if timeout:
@@ -316,7 +316,7 @@ class NetworkTimeoutError(NetworkError):
 
 class CacheError(DsearchError):
     """Raised when cache operation fails."""
-    
+
     def __init__(self, message: str, **kwargs):
         super().__init__(
             message=message,
@@ -327,7 +327,7 @@ class CacheError(DsearchError):
 
 class CacheMissError(CacheError):
     """Raised when cache key is not found."""
-    
+
     def __init__(self, key: str, **kwargs):
         super().__init__(
             message=f"Cache miss for key: {key}",
@@ -345,21 +345,21 @@ def wrap_exception(
 ) -> DsearchError:
     """
     Wrap a standard exception in a DsearchError.
-    
+
     Args:
         exc: Original exception
         message: Optional override message
         context: Additional context
-        
+
     Returns:
         DsearchError with appropriate code
     """
     if isinstance(exc, DsearchError):
         return exc
-    
+
     msg = message or str(exc)
     ctx = context or {}
-    
+
     # Map common exceptions
     import requests
     if isinstance(exc, requests.exceptions.Timeout):
@@ -388,7 +388,7 @@ def wrap_exception(
                 context=ctx,
                 cause=exc
             )
-    
+
     return DsearchError(
         message=msg,
         context=ctx,
@@ -399,22 +399,32 @@ def wrap_exception(
 def is_retryable(exc: Exception) -> bool:
     """
     Check if an exception indicates a retryable error.
-    
+
     Args:
         exc: Exception to check
-        
+
     Returns:
         True if error is retryable
     """
     if isinstance(exc, DsearchError):
         return exc.retryable
-    
-    # Common retryable exceptions
-    import requests
+
+    # Common retryable exceptions (built-in)
     retryable_exceptions = (
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.ChunkedEncodingError,
+        ConnectionError,  # network-level errors
+        TimeoutError,     # socket-level timeouts
+        OSError,          # IO errors including network
     )
-    
+
+    # requests library exceptions
+    try:
+        import requests
+        retryable_exceptions += (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        )
+    except ImportError:
+        pass
+
     return isinstance(exc, retryable_exceptions)

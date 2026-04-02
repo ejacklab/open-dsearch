@@ -269,15 +269,14 @@ class SearchOrchestrator:
         """Search with a single provider."""
         if not provider.is_available:
             return []
-        
-        try:
-            return await provider.search(
-                query,
-                num_results=num_results,
-                include_realtime=include_realtime
-            )
-        except Exception:
-            return []
+
+        # Do NOT swallow exceptions — let asyncio.gather handle them so
+        # orchestrator can record which providers failed
+        return await provider.search(
+            query,
+            num_results=num_results,
+            include_realtime=include_realtime
+        )
     
     def _get_providers(self, names: Optional[List[str]]) -> List[SearchProvider]:
         """Get providers by name or all available."""

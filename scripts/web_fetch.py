@@ -10,6 +10,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Optional dependencies
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
+try:
+    from markdownify import markdownify as _md
+except ImportError:
+    _md = None
+
 
 def get_rust_binary():
     script_dir = Path(__file__).parent
@@ -37,23 +48,20 @@ def fetch_rust(url: str, max_kb: int = 100):
 
 
 def fetch_python(url: str, max_kb: int = 100):
-    try:
-        import httpx
-        from markdownify import markdownify as md
-    except ImportError:
+    if httpx is None or _md is None:
         print("Error: Install dependencies: pip install httpx markdownify", file=sys.stderr)
         return None
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; ResearchBot/1.0)"
     }
-    
+
     response = httpx.get(url, headers=headers, timeout=30.0)
     response.raise_for_status()
-    
+
     content = response.text[:max_kb * 1024]
-    markdown = md(content, heading_style="ATX")
-    
+    markdown = _md(content, heading_style="ATX")
+
     return {"content": markdown}
 
 

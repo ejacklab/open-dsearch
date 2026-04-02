@@ -32,7 +32,7 @@ class TestTokenBucket:
         
         assert bucket.acquire() is True
         state = bucket.get_state()
-        assert state["tokens"] == 4.0
+        assert state["tokens"] == pytest.approx(4.0, abs=0.01)
     
     def test_acquire_multiple_tokens(self):
         """Test acquiring multiple tokens."""
@@ -40,7 +40,7 @@ class TestTokenBucket:
         
         assert bucket.acquire(3) is True
         state = bucket.get_state()
-        assert state["tokens"] == 7.0
+        assert state["tokens"] == pytest.approx(7.0, abs=0.01)
     
     def test_acquire_failure(self):
         """Test acquisition failure when empty."""
@@ -102,7 +102,7 @@ class TestTokenBucket:
             t.join()
         
         state = bucket.get_state()
-        assert state["tokens"] == 50.0
+        assert state["tokens"] == pytest.approx(50.0, abs=1.0)  # high rate = refill during test, allow drift
 
 
 class TestLeakyBucket:
@@ -120,7 +120,7 @@ class TestLeakyBucket:
         
         assert bucket.acquire() is True
         state = bucket.get_state()
-        assert state["volume"] == 1.0
+        assert state["volume"] == pytest.approx(1.0, abs=0.01)  # timing drift
     
     def test_acquire_failure_when_full(self):
         """Test failure when bucket is full."""

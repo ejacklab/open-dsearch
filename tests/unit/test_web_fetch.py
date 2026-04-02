@@ -73,21 +73,21 @@ class TestFetchPython:
     """Tests for Python fetch backend."""
     
     @patch("web_fetch.httpx.get")
-    @patch("web_fetch.markdownify")
+    @patch("web_fetch._md")
     def test_fetch_python_success(self, mock_md, mock_get):
         """Should fetch and convert with Python."""
         mock_response = MagicMock()
         mock_response.text = "<html><body><h1>Test</h1></body></html>"
         mock_get.return_value = mock_response
         mock_md.return_value = "# Test"
-        
+
         result = wf.fetch_python("https://example.com", max_kb=100)
         assert result is not None
         assert result["content"] == "# Test"
-    
+
     def test_fetch_python_import_error(self):
         """Should return None when dependencies missing."""
-        with patch.dict("sys.modules", {"httpx": None}):
+        with patch.object(wf, "httpx", None):
             result = wf.fetch_python("https://example.com")
             assert result is None
 

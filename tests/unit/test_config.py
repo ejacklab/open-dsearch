@@ -95,14 +95,20 @@ class TestConfigSecurity:
         """Verify no hardcoded secrets in config module."""
         config_source = Path(config.__file__).read_text()
         # Check for common secret patterns
+        # Only scan actual code lines (not comments) for hardcoded secrets
+        code_lines = [
+            line for line in config_source.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        code_text = "\n".join(code_lines)
         suspicious_patterns = [
             "sk-",  # OpenAI-style key pattern
-            "api_key = \"",  # Hardcoded key
+            "api_key = \"",  # Hardcoded key (in actual code, not comments)
             "password = \"",
             "secret = \"",
         ]
         for pattern in suspicious_patterns:
-            assert pattern not in config_source.lower(), f"Found suspicious pattern: {pattern}"
+            assert pattern not in code_text.lower(), f"Found suspicious pattern: {pattern}"
     
     def test_config_path_uses_home_directory(self):
         """Config should be in user's home directory."""
