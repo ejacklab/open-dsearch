@@ -3,13 +3,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import CacheBackend, CacheKey
-    from .sqlite_cache import SQLiteCache
     from .memory_cache import MemoryCache
 
 __all__ = [
     "CacheBackend",
     "CacheKey",
-    "SQLiteCache",
     "MemoryCache",
 ]
 
@@ -22,9 +20,6 @@ def __getattr__(name: str):
     if name == "CacheKey":
         from .base import CacheKey
         return CacheKey
-    if name == "SQLiteCache":
-        from .sqlite_cache import SQLiteCache
-        return SQLiteCache
     if name == "MemoryCache":
         from .memory_cache import MemoryCache
         return MemoryCache
