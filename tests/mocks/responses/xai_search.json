@@ -1,0 +1,21 @@
+{
+  "request": {
+    "url": "https://api.x.ai/v1/chat/completions",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "choices": [{
+        "message": {
+          "content": "Here are the search results for Python programming:",
+          "citations": [
+            {"url": "https://www.python.org", "title": "Python.org Official"},
+            {"url": "https://docs.python.org", "title": "Python Documentation"},
+            {"url": "https://github.com/python", "title": "Python on GitHub"}
+          ]
+        }
+      }]
+    }
+  }
+}

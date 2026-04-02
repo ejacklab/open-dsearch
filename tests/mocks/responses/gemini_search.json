@@ -1,0 +1,26 @@
+{
+  "request": {
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "candidates": [{
+        "content": {
+          "role": "model",
+          "parts": [{"text": "Search results for query"}]
+        },
+        "groundingMetadata": {
+          "groundingChunks": [
+            {"web": {"uri": "https://docs.python.org/3", "title": "Python Documentation"}},
+            {"web": {"uri": "https://github.com/python/cpython", "title": "CPython GitHub Repository"}},
+            {"web": {"uri": "https://realpython.com", "title": "Real Python Tutorials"}},
+            {"web": {"uri": "https://docs.python.org/3/tutorial", "title": "Python Tutorial"}},
+            {"web": {"uri": "https://pypi.org", "title": "Python Package Index"}}
+          ]
+        }
+      }]
+    }
+  }
+}

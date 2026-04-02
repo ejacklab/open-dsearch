@@ -1,0 +1,16 @@
+{
+  "request": {
+    "url": "https://api.moonshot.ai/v1/chat/completions",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "choices": [{
+        "message": {
+          "content": "Here are the search results:\n\n[Python Official Website](https://www.python.org)\nThe official home of the Python Programming Language.\n\n[Python Documentation](https://docs.python.org/3)\nOfficial Python documentation and tutorials.\n\n[Real Python](https://realpython.com)\nPython tutorials and courses for all levels.\n\n[GitHub - python/cpython](https://github.com/python/cpython)\nThe Python programming language source code."
+        }
+      }]
+    }
+  }
+}

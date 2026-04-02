@@ -1,0 +1,18 @@
+{
+  "request": {
+    "url": "https://api.minimax.io/v1/coding_plan/search",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "organic": [
+        {"title": "Python Official Website", "link": "https://www.python.org", "snippet": "The official home of the Python Programming Language"},
+        {"title": "Python Documentation", "link": "https://docs.python.org", "snippet": "Official Python documentation"},
+        {"title": "Real Python", "link": "https://realpython.com", "snippet": "Python tutorials and courses"},
+        {"title": "GitHub - python/cpython", "link": "https://github.com/python/cpython", "snippet": "The Python programming language"},
+        {"title": "PyPI - The Python Package Index", "link": "https://pypi.org", "snippet": "Python package repository"}
+      ]
+    }
+  }
+}
