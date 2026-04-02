@@ -69,6 +69,7 @@ class URLFetcher:
         
         self._session: Optional[aiohttp.ClientSession] = None
         self._connector: Optional[aiohttp.TCPConnector] = None
+        self._semaphore: Optional[asyncio.Semaphore] = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
@@ -79,31 +80,31 @@ class URLFetcher:
                 enable_cleanup_closed=True,
                 force_close=True,
             )
-            
+
             timeout = aiohttp.ClientTimeout(total=self.timeout)
-            
+
             self._session = aiohttp.ClientSession(
                 connector=self._connector,
                 timeout=timeout,
                 headers=self.headers
             )
-        
+
         return self._session
     
     async def fetch(self, url: str) -> FetchResult:
         """
         Fetch URL content.
-        
+
         Args:
             url: URL to fetch
-            
+
         Returns:
             Fetch result
         """
         import time
-        
+
         start_time = time.time()
-        
+
         # Validate URL
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc:
@@ -112,55 +113,57 @@ class URLFetcher:
                 status=0,
                 error="Invalid URL"
             )
-        
+
         try:
             session = await self._get_session()
-            
+
             async with session.get(url) as response:
+                fetch_time_ms = (time.time() - start_time) * 1000
                 status = response.status
                 content_type = response.headers.get("Content-Type", "")
-                
+
                 if status != 200:
                     return FetchResult(
                         url=url,
                         status=status,
                         content_type=content_type,
                         error=f"HTTP {status}",
-                        fetch_time_ms=(time.time() - start_time) * 1000
+                        fetch_time_ms=fetch_time_ms
                     )
-                
+
                 # Read content with size limit
                 content_bytes = await response.read()
-                
+
                 if len(content_bytes) > self.max_size:
                     return FetchResult(
                         url=url,
                         status=status,
                         content_type=content_type,
                         error=f"Content too large ({len(content_bytes)} bytes)",
-                        fetch_time_ms=(time.time() - start_time) * 1000,
+                        fetch_time_ms=fetch_time_ms,
                         byte_size=len(content_bytes)
                     )
-                
+
                 # Decode content
                 try:
                     content = content_bytes.decode('utf-8')
                 except UnicodeDecodeError:
                     content = content_bytes.decode('utf-8', errors='ignore')
-                
+
                 # Extract title
                 title = self._extract_title(content)
-                
+                fetch_time_ms = (time.time() - start_time) * 1000
+
                 return FetchResult(
                     url=url,
                     status=status,
                     content=content,
                     content_type=content_type,
                     title=title,
-                    fetch_time_ms=(time.time() - start_time) * 1000,
+                    fetch_time_ms=fetch_time_ms,
                     byte_size=len(content_bytes)
                 )
-                
+
         except asyncio.TimeoutError:
             return FetchResult(
                 url=url,
@@ -190,20 +193,21 @@ class URLFetcher:
     ) -> list:
         """
         Fetch multiple URLs concurrently.
-        
+
         Args:
             urls: URLs to fetch
             max_concurrent: Maximum concurrent fetches
-            
+
         Returns:
             List of fetch results
         """
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
+        if self._semaphore is None or self._semaphore._value != max_concurrent:
+            self._semaphore = asyncio.Semaphore(max_concurrent)
+
         async def fetch_with_limit(url):
-            async with semaphore:
+            async with self._semaphore:
                 return await self.fetch(url)
-        
+
         tasks = [fetch_with_limit(url) for url in urls]
         return await asyncio.gather(*tasks)
     
@@ -224,12 +228,16 @@ class URLFetcher:
         return None
     
     async def close(self):
-        """Close fetcher."""
+        """Close fetcher and release resources."""
         if self._session and not self._session.closed:
             await self._session.close()
-        
+            self._session = None
+
         if self._connector:
             await self._connector.close()
+            self._connector = None
+
+        self._semaphore = None
     
     async def __aenter__(self):
         """Async context manager entry."""
