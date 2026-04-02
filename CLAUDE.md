@@ -84,6 +84,30 @@ Full tooling reference → `rules/tooling.md`
 
 ---
 
+## CLI Design Decisions (Rationale)
+
+The Python CLI (`research_python.py`) is the primary interface. Key decisions:
+
+### `--verify` defaults to OFF
+URL verification (checking if a URL responds) does NOT catch hallucinated URLs — it only filters genuinely dead servers. For LLM-augmented research, the human/agent spot-checks final links anyway. Speed > pre-filtering. Verification is available via `--verify` for cases where it's genuinely needed.
+
+### `--dry-run` exists
+Shows the query plan before burning API calls. Always use this first when scoping a new topic — confirm the query variants look right, then run for real.
+
+### `--no-fetch` for md mode
+Full page fetching (HTML → markdown) is the slow step. `--no-fetch` gives you titles, URLs, and snippets immediately in md format — useful when you only need to know what sources exist, not their content.
+
+### `-Q` (not `-q`) for query count
+Standard Unix convention: `-q` means "quiet/terse". Using `-Q` avoids accidental collision when scripts pass through extra flags.
+
+### `--mode vectors` is the default
+Vectors mode produces a minimal JSON index (title + URL) optimized for LLM consumption. Fastest path from search → structured data the agent can work with. Switch to `json` for raw results with snippets, `md` for full reports.
+
+### Why these defaults work for agents
+An agent doing research needs: speed (no unnecessary I/O),可控性 (know what will happen before it happens), and structured output (not walls of text). Every default is chosen to serve that pattern.
+
+---
+
 ## Workflow
 
 Follows global workflow from `~/.agents/AGENTS.md`. Project additions:

@@ -85,8 +85,8 @@ cd research-tool
 cargo build --release
 cd ..
 
-# Install Python dependencies (if any)
-pip install -r requirements.txt  # if exists
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
 ## ⚙️ Configuration
@@ -125,20 +125,52 @@ export DEBUG_MODE=false
 
 ## 🎯 Usage
 
-### 1. Basic Research Command
+### Quick Reference (Dave's workflow)
 
 ```bash
-# Navigate to the research script directory
-cd .agents/skills/dsearch/scripts/
+cd scripts
 
-# Perform research with vector storage
-python research.py "AI agent architectures 2026" --mode vectors
+# 1. ALWAYS dry-run first — see query plan without burning API calls
+python research_python.py "<topic>" --dry-run
 
-# Save raw JSON results
-python research.py "machine learning vector databases" --mode json
+# 2. Fast probe — get titles/URLs/snippets, no fetching, no verification
+python research_python.py "<topic>" -m json --top 10
 
-# Generate full markdown report
-python research.py "Rust async patterns" --mode md --top 10
+# 3. Deep probe — full markdown report with page content (slow)
+python research_python.py "<topic>" -m md --top 5
+
+# 4. Quick index — URL list for LLM to process later
+python research_python.py "<topic>" -m vectors --top 10
+```
+
+### Flag Guide
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--dry-run` | off | Show query plan without executing — always use first |
+| `--mode`, `-m` | `vectors` | `vectors`=URL index, `json`=raw, `md`=full report |
+| `--top`, `-n` | 5 | Final sources after ranking |
+| `--queries`, `-Q` | 5 | Query variants generated from topic |
+| `--no-fetch` | off | Skip page content in md mode (titles/URLs/snippets only) |
+| `--verify` | **off** | Verify URLs reachable (slow, marginal value — most skip this) |
+| `--urls`, `-u` | — | Direct URLs to include, bypasses search |
+| `--output`, `-o` | auto | Output file |
+
+### Why --verify is off by default
+
+URL verification only checks if a server responds — it cannot detect hallucinated URLs (plausible-looking links that don't exist). For LLM research workflows, manual spot-checking of final links is more effective than pre-verification. Speed matters more than pre-filtering.
+
+### Example Workflow
+
+```bash
+# Step 1: Plan
+python research_python.py "Moonshot Kimi API multimodal embedding" --dry-run
+
+# Step 2: Get fast results (no fetching)
+python research_python.py "Moonshot Kimi API multimodal embedding" -m json --top 10 -o kim i_api.json
+
+# Step 3: If needed, full report on top 3
+python research_python.py "Moonshot Kimi API multimodal embedding" -m md --top 3 -o kim i_report.md
 ```
 
 ### 2. Using Claude Code Skills
@@ -320,19 +352,17 @@ For support, please:
 
 **Note**: This repository is part of a two-repo workspace structure with separate public and private components. Always ensure you're working in the correct repository and respecting the public/private boundary.
 
-**Last Updated**: February 2026
+**Last Updated**: April 2026
 
 ---
 
-## ⚠️ v0.1.0 - Early Release
+## ✅ v0.2.0 - Now Available
 
-This is an **early release** with known limitations:
+**What's new:**
 
-- ❌ No tests yet (coming in v0.2.0)
-- ⚠️ Hardcoded timeouts
-- ⚠️ Basic error messages
-- ⚠️ No rate limiting
+- ✅ **Unit tests** — 60 comprehensive tests covering core functionality
+- ✅ **Multiple providers** — Support for Gemini, MiniMax, and Kimi search APIs
+- ✅ **SQLite + memory caching** — Persistent storage with in-memory caching layer
+- ✅ **Async-first architecture** — Fully async implementation for better performance
 
-**But it works!** Core functionality is production-ready. We're shipping early and improving based on user feedback.
-
-**See `CODE_REVIEW.md` for full details and `TODO.md` for our roadmap.**
+See `CODE_REVIEW.md` for implementation details and `TODO.md` for upcoming features.

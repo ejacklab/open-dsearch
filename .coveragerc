@@ -1,0 +1,25 @@
+[run]
+source = scripts
+omit =
+    */test_*.py
+    */tests/*
+    */venv/*
+    */.venv/*
+    */__pycache__/*
+    scripts/rust/*
+    scripts/test_*.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+
+[html]
+directory = tests/reports/coverage
+
+[xml]
+output = tests/reports/coverage.xml

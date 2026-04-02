@@ -149,11 +149,17 @@ class Config:
             content = self.config_file.read_text()
             
             # Try YAML first
+            data = None
             try:
                 import yaml
-                data = yaml.safe_load(content)
-            except ImportError:
-                # Fallback to JSON
+                parsed = yaml.safe_load(content)
+                if isinstance(parsed, dict):
+                    data = parsed
+            except (ImportError, yaml.YAMLError):
+                pass
+
+            # Fallback to JSON
+            if data is None:
                 try:
                     data = json.loads(content)
                 except json.JSONDecodeError:
@@ -161,10 +167,10 @@ class Config:
                     try:
                         import tomllib
                         data = tomllib.loads(content)
-                    except ImportError:
+                    except (ImportError, json.JSONDecodeError):
                         return
-            
-            if data:
+
+            if data and isinstance(data, dict):
                 self._merge_config(data, ConfigSource.FILE)
         except Exception as e:
             raise ConfigError(f"Failed to load config file: {e}")

@@ -1,0 +1,17 @@
+# Test dependencies for Open Dsearch
+# Install with: pip install -r requirements-test.txt
+
+# Core testing framework
+pytest>=7.4.0
+
+# Async test support (required by asyncio_mode = auto in pytest.ini)
+pytest-asyncio>=0.21.0
+
+# Coverage reporting
+pytest-cov>=4.1.0
+
+# HTTP request mocking (used in tests)
+responses>=0.24.0
+
+# Benchmark testing (used by test_performance.py)
+pytest-benchmark>=4.0.0
