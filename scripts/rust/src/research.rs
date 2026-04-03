@@ -34,6 +34,10 @@ struct Args {
     #[arg(long)]
     index: bool,
 
+    /// Wipe the ZVec collection before pushing (fresh start).
+    #[arg(long)]
+    clear: bool,
+
     /// ZVec collection path (default: ~/.open-dsearch/zvec_data).
     #[arg(long)]
     index_collection: Option<String>,
@@ -96,6 +100,9 @@ async fn main() -> Result<(), String> {
     // ── Push to ZVec if --index ──
     if args.index {
         println!("\n[zvec] Indexing {} results...", all_results.len());
+        if args.clear {
+            push_zvec_clear(args.index_collection.as_deref());
+        }
         push_zvec_batch(&all_results, &args.topic, "dsearch", args.index_collection.as_deref());
         println!("[zvec] Done.");
     }
@@ -208,6 +215,39 @@ async fn run_kimi_phase(
 }
 
 // ── ZVec batch push ─────────────────────────────────────────────────────────
+
+/// Wipe the ZVec collection via python3 subprocess.
+fn push_zvec_clear(collection: Option<&str>) {
+    let python_script = std::path::PathBuf::from(
+        "/home/smoke01/.openclaw/workspace-dave/open-dsearch/scripts/push_zvec.py",
+    );
+
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg(&python_script)
+        .arg("add")
+        .arg("--clear");
+
+    if let Some(col) = collection {
+        cmd.arg("--collection").arg(col);
+    }
+
+    match cmd.stdout(std::process::Stdio::piped()).spawn() {
+        Ok(child) => {
+            match child.wait_with_output() {
+                Ok(out) => {
+                    if out.status.success() {
+                        print!("  [zvec] cleared");
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprint!("  [zvec] clear failed: {}", stderr.trim());
+                    }
+                }
+                Err(e) => eprintln!("  [zvec] clear wait failed: {}", e),
+            }
+        }
+        Err(e) => eprintln!("  [zvec] clear spawn failed: {}", e),
+    }
+}
 
 /// Push all results to ZVec via a single python3 subprocess (batch JSONL).
 /// Uses file locking (fcntl.flock) in push_zvec.py to avoid concurrent-write races.
@@ -372,6 +412,13 @@ mod tests {
         let args = parse(&["--topic", "test", "--index", "--index-collection", "/tmp/my-col"]).unwrap();
         assert!(args.index);
         assert_eq!(args.index_collection.as_deref(), Some("/tmp/my-col"));
+    }
+
+    #[test]
+    fn test_clear_flag() {
+        let args = parse(&["--topic", "test", "--index", "--clear"]).unwrap();
+        assert!(args.clear);
+        assert!(args.index);
     }
 
     #[test]

@@ -249,6 +249,23 @@ def get_stats(collection_path: Optional[Path] = None) -> dict:
         return {}
 
 
+def clear_collection(collection_path: Optional[Path] = None) -> bool:
+    """Wipe the entire collection. Removes all docs. Returns True on success."""
+    path = collection_path or DEFAULT_COLLECTION_DIR
+    try:
+        # Evict from cache so next _get_collection recreates fresh
+        path_str = str(path)
+        if path_str in _COLLECTION_CACHE:
+            del _COLLECTION_CACHE[path_str]
+        # Remove the collection directory entirely — _get_collection recreates on next call
+        if path.exists():
+            shutil.rmtree(path_str)
+        return True
+    except Exception as e:
+        print(f"[push_zvec] clear_collection failed: {e}", file=sys.stderr)
+        return False
+
+
 def clear_topic(topic: str, collection_path: Optional[Path] = None):
     path = collection_path or DEFAULT_COLLECTION_DIR
     try:
@@ -287,6 +304,8 @@ Examples:
     add.add_argument("--source", "-s", default="cli")
     add.add_argument("--batch", action="store_true")
     add.add_argument("--collection", "-c")
+    add.add_argument("--clear", action="store_true",
+                    help="Wipe the collection before adding results (fresh start)")
 
     query = sub.add_parser("query")
     query.add_argument("query", nargs="?")
@@ -306,11 +325,20 @@ Examples:
     collection_path = Path(args.collection) if args.collection else None
 
     if args.command == "add":
+        if args.clear:
+            if clear_collection(collection_path):
+                print("Collection cleared.")
+            else:
+                print("Warning: collection was not found or could not be cleared.", file=sys.stderr)
+            # --clear alone is sufficient; no --batch or --title/--url required
+            if not args.batch and not args.title and not args.url:
+                return
+
         if args.batch:
             results = [json.loads(l) for l in sys.stdin if l.strip()]
             count = push_batch(results, args.topic, collection_path)
             print(f"Indexed {count} results")
-        else:
+        elif args.title or args.url:
             if not args.title or not args.url:
                 print("--title and --url required", file=sys.stderr)
                 sys.exit(1)

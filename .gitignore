@@ -23,3 +23,6 @@ scripts/go/research
 
 # Local agent workspace symlink (points to ~/.agents — machine-specific)
 .agents
+
+# Dev utilities
+scripts/compare_run.py
