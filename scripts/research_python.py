@@ -18,6 +18,21 @@ from urllib.parse import urlparse
 
 import requests
 
+try:
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location(
+        "push_zvec",
+        Path(__file__).parent.resolve() / "push_zvec.py"
+    )
+    push_zvec = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(push_zvec)
+    PUSH_ZVEC_AVAILABLE = True
+except Exception as _e:
+    import sys as _sys
+    print(f"[push_zvec import failed: {_e}]", file=_sys.stderr)
+    PUSH_ZVEC_AVAILABLE = False
+    push_zvec = None
+
 
 @dataclass
 class SearchResult:
@@ -423,6 +438,8 @@ def research(
     verify: bool = False,
     dry_run: bool = False,
     no_fetch: bool = False,
+    index: bool = False,
+    index_collection: str = None,
 ) -> Optional[dict]:
     """Run research pipeline."""
     # Validate inputs
@@ -514,6 +531,18 @@ def research(
     if verify:
         ranked = verify_urls(ranked, timeout=10)
 
+    # Push to ZVec if --index flag set
+    if index and PUSH_ZVEC_AVAILABLE and not dry_run:
+        collection_path = Path(index_collection) if index_collection else None
+        count = push_zvec.push_batch(
+            [{"title": r.title, "url": r.url, "snippet": r.snippet, "source": r.source} for r in ranked],
+            topic,
+            collection_path,
+        )
+        print(f"  → Pushed {count} results to ZVec")
+    elif index and not PUSH_ZVEC_AVAILABLE:
+        print("  → [zvec] not available (pip install zvec), skipping --index")
+
     # Output based on mode
     if mode == "json":
         output_data = [
@@ -587,6 +616,10 @@ Examples:
                         help="Skip fetching page content in md mode (titles/URLs/snippets only)")
     parser.add_argument("--verify", action="store_true",
                         help="Verify URLs are reachable before including (slow, marginal value)")
+    parser.add_argument("--index", action="store_true",
+                        help="Push results to ZVec vector collection after search")
+    parser.add_argument("--index-collection", "-C",
+                        help="ZVec collection path (default: ~/.open-dsearch/zvec_data)")
 
     args = parser.parse_args()
 
@@ -601,6 +634,8 @@ Examples:
         verify=args.verify,
         dry_run=args.dry_run,
         no_fetch=args.no_fetch,
+        index=args.index,
+        index_collection=args.index_collection,
     )
 
     if not result:
