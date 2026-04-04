@@ -1,0 +1,91 @@
+# Open DSearch Configuration Template
+# Copy this file to dsearch.toml and edit with your API keys
+
+# Model configurations
+[models]
+  # Google Gemini configuration
+  [models.gemini]
+  api_key = "your_gemini_api_key_here"
+  model = "gemini-pro"  # Options: gemini-pro, gemini-pro-1.5, gemini-2.0-flash-exp
+  base_url = "https://generativelanguage.googleapis.com"
+  max_tokens = 8192
+  temperature = 0.7
+
+  # xAI (Grok) configuration
+  [models.xai]
+  api_key = "your_xai_api_key_here"
+  model = "grok-beta"  # Options: grok-beta, grok-1
+  base_url = "https://api.x.ai"
+  max_tokens = 4096
+  temperature = 0.5
+
+  # MiniMax configuration
+  [models.minimax]
+  api_key = "your_minimax_api_key_here"
+  model = "abab6.5-chat"  # Options: abab6.5-chat, abab5.5-chat, abab6.5s-chat
+  base_url = "https://api.minimax.chat/v1"
+  max_tokens = 16384
+  temperature = 0.7
+
+# Storage configuration
+[storage]
+enabled = true
+vector_db_path = "./data/vectors"
+max_memory_mb = 1024
+sessions_path = "./sessions"
+max_sessions = 100
+cleanup_days = 30
+
+# Skills configuration
+[skills]
+skills_path = "./skills"
+auto_load = true
+max_skill_memory = 5000  # Maximum items to keep in skill memory
+enable_web_access = true
+custom_skills_path = "./custom-skills"
+
+# Runtime configuration
+[runtime]
+log_level = "info"  # Options: trace, debug, info, warn, error
+parallel_searches = 3
+default_timeout = 30  # seconds
+max_retries = 3
+retry_delay = 2  # seconds
+
+# Feature flags
+[features]
+enable_vector_search = true
+enable_session_persistence = true
+enable_skill_chaining = true
+enable_web_scraping = true
+enable_citations = true
+enable_auto_summary = true
+
+# Performance tuning
+[performance]
+cache_size = 1000
+cache_ttl = 3600  # seconds
+max_concurrent_requests = 10
+request_timeout = 30  # seconds
+connection_pool_size = 5
+
+# Search preferences
+[search]
+default_max_results = 10
+min_relevance_threshold = 0.5
+enable_real_time = true
+refresh_interval = 300  # seconds
+
+# Export settings
+[export]
+default_format = "markdown"  # Options: markdown, json, csv, html
+include_metadata = true
+include_sources = true
+include_timestamps = true
+
+# Security settings
+[security]
+sanitize_inputs = true
+validate_urls = true
+max_content_length = 100000  # characters
+enable_content_filter = true
