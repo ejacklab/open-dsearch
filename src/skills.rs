@@ -1,10 +1,10 @@
+use crate::models::SkillsConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Skills registry for managing research skills
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SkillsRegistry {
     skills: HashMap<String, Box<dyn Skill>>,
     config: SkillsConfig,
@@ -12,7 +12,7 @@ pub struct SkillsRegistry {
 
 impl SkillsRegistry {
     pub fn new(config: &SkillsConfig) -> Result<Self> {
-        let mut skills = HashMap::new();
+        let mut skills: HashMap<String, Box<dyn Skill>> = HashMap::new();
         
         // Load built-in skills
         skills.insert("web-research".to_string(), Box::new(WebResearchSkill::new()));
@@ -45,7 +45,7 @@ impl SkillsRegistry {
         }
     }
 
-    fn load_custom_skills(skills: &mut HashMap<String, Box<dyn Skill>>, config: &SkillsConfig) -> Result<()> {
+    fn load_custom_skills(skills: &mut HashMap<String, Box<dyn Skill>>, config: &crate::models::SkillsConfig) -> Result<()> {
         let skills_path = &config.skills_path;
         
         if !skills_path.exists() {
@@ -70,7 +70,7 @@ impl SkillsRegistry {
 
 /// Skill trait for implementing research skills
 #[async_trait::async_trait]
-pub trait Skill: Send + Sync {
+pub trait Skill: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     async fn execute(&self, context: SkillContext) -> Result<SkillResult>;
@@ -82,7 +82,7 @@ pub trait Skill: Send + Sync {
 pub struct SkillContext {
     pub query: String,
     pub parameters: HashMap<String, serde_json::Value>,
-    pub previous_results: Vec<SearchResults>,
+    pub previous_results: Vec<crate::SearchResults>,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -114,6 +114,7 @@ pub struct SchemaParameter {
 }
 
 /// Web research skill
+#[derive(Debug)]
 pub struct WebResearchSkill {
     name: String,
     description: String,
@@ -193,6 +194,7 @@ impl Skill for WebResearchSkill {
 }
 
 /// Literature review skill
+#[derive(Debug)]
 pub struct LiteratureReviewSkill {
     name: String,
     description: String,
@@ -263,6 +265,7 @@ impl Skill for LiteratureReviewSkill {
 }
 
 /// Data analysis skill
+#[derive(Debug)]
 pub struct DataAnalysisSkill {
     name: String,
     description: String,
@@ -325,6 +328,7 @@ impl Skill for DataAnalysisSkill {
 }
 
 /// Code review skill
+#[derive(Debug)]
 pub struct CodeReviewSkill {
     name: String,
     description: String,
@@ -383,6 +387,7 @@ impl Skill for CodeReviewSkill {
 }
 
 /// Policy research skill
+#[derive(Debug)]
 pub struct PolicyResearchSkill {
     name: String,
     description: String,
@@ -403,7 +408,7 @@ impl Skill for PolicyResearchSkill {
         &self.name
     }
 
-    fn description(&self) -> &self.description {
+    fn description(&self) -> &str {
         &self.description
     }
 
@@ -441,14 +446,17 @@ impl Skill for PolicyResearchSkill {
 }
 
 /// Custom skill placeholder
+#[derive(Debug)]
 pub struct CustomSkill {
     name: String,
+    description: String,
 }
 
 impl CustomSkill {
     fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            description: "Custom research skill".to_string(),
         }
     }
 }
@@ -460,7 +468,7 @@ impl Skill for CustomSkill {
     }
 
     fn description(&self) -> &str {
-        "Custom research skill"
+        &self.description
     }
 
     async fn execute(&self, context: SkillContext) -> Result<SkillResult> {

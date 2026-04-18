@@ -197,7 +197,7 @@ impl ContentExtractor {
 
     fn extract_meta_tag(html: &str, name: &str) -> Option<String> {
         let pattern = format!(r#"<meta[^>]*name=["']{}["'][^>]*content=["']([^"']*)["']"#, name);
-        regex::Regex::new(&pattern).ok()?.captures(html)?.get(1)?.as_str().map(|s| s.to_string())
+        Some(regex::Regex::new(&pattern).ok()?.captures(html)?.get(1)?.as_str().to_string())
     }
 }
 
@@ -419,33 +419,34 @@ impl FileUtils {
     }
 
     /// List files in directory
-    pub async fn list_files(path: &std::path::Path, recursive: bool) -> Result<Vec<std::path::PathBuf>> {
-        let mut files = Vec::new();
-        
-        if path.is_file() {
-            files.push(path.to_path_buf());
-            return Ok(files);
-        }
+    pub fn list_files(path: &std::path::Path, recursive: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<std::path::PathBuf>>> + Send + '_>> {
+        Box::pin(async move {
+            let mut files = Vec::new();
 
-        if path.is_dir() {
-            let mut entries = tokio::fs::read_dir(path).await?;
-            
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                
-                if path.is_file() {
-                    files.push(path);
-                } else if path.is_dir() && recursive {
-                    let sub_files = Self::list_files(&path, recursive).await?;
-                    files.extend(sub_files);
+            if path.is_file() {
+                files.push(path.to_path_buf());
+                return Ok(files);
+            }
+
+            if path.is_dir() {
+                let mut entries = tokio::fs::read_dir(path).await?;
+
+                while let Some(entry) = entries.next_entry().await? {
+                    let p = entry.path();
+
+                    if p.is_file() {
+                        files.push(p);
+                    } else if p.is_dir() && recursive {
+                        let sub_files = Self::list_files(&p, recursive).await?;
+                        files.extend(sub_files);
+                    }
                 }
             }
-        }
 
-        Ok(files)
+            Ok(files)
+        })
     }
-}
-
+    }
 /// Progress tracking utilities
 pub struct ProgressTracker {
     current: usize,

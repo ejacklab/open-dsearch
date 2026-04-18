@@ -2,36 +2,149 @@ use anyhow::Result;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-/// Model registry for managing multiple AI models
-#[derive(Debug, Clone)]
+// ── Configuration types ──────────────────────────────────────────────
+
+/// Main configuration structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub models: ModelsConfig,
+    pub storage: StorageConfig,
+    pub skills: SkillsConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            models: ModelsConfig {
+                gemini: Some(GeminiConfig {
+                    api_key: String::new(),
+                    model: "gemini-2.0-flash".into(),
+                    base_url: "https://generativelanguage.googleapis.com".into(),
+                    max_tokens: 8192,
+                    temperature: 0.7,
+                    timeout: Some(30),
+                }),
+                xai: Some(XaiConfig {
+                    api_key: String::new(),
+                    model: "grok-beta".into(),
+                    base_url: "https://api.x.ai".into(),
+                    max_tokens: 4096,
+                    temperature: 0.7,
+                    timeout: Some(30),
+                }),
+                minimax: Some(MiniMaxConfig {
+                    api_key: String::new(),
+                    model: "MiniMax-Text-01".into(),
+                    base_url: "https://api.minimax.chat".into(),
+                    max_tokens: 4096,
+                    temperature: 0.7,
+                    timeout: Some(30),
+                }),
+            },
+            storage: StorageConfig {
+                enabled: false,
+                vector_db_path: std::path::PathBuf::from("./data"),
+                max_memory_mb: 1024,
+                sessions_path: std::path::PathBuf::from("./sessions"),
+            },
+            skills: SkillsConfig {
+                skills_path: std::path::PathBuf::from("./skills"),
+                auto_load: true,
+            },
+        }
+    }
+}
+
+/// Model configurations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelsConfig {
+    pub gemini: Option<GeminiConfig>,
+    pub xai: Option<XaiConfig>,
+    pub minimax: Option<MiniMaxConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub max_tokens: usize,
+    pub temperature: f64,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub max_tokens: usize,
+    pub temperature: f64,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxConfig {
+    pub api_key: String,
+    pub model: String,
+    pub base_url: String,
+    pub max_tokens: usize,
+    pub temperature: f64,
+    #[serde(default)]
+    pub timeout: Option<u64>,
+}
+
+/// Storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    pub enabled: bool,
+    pub vector_db_path: std::path::PathBuf,
+    pub max_memory_mb: usize,
+    pub sessions_path: std::path::PathBuf,
+}
+
+/// Skills configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsConfig {
+    pub skills_path: std::path::PathBuf,
+    pub auto_load: bool,
+}
+
+// ── Model registry ───────────────────────────────────────────────────
+
+/// Model registry for managing multiple AI model clients
+#[derive(Debug)]
 pub struct ModelRegistry {
     models: HashMap<String, Box<dyn ModelClient>>,
 }
 
 impl ModelRegistry {
     pub fn new(config: &Config) -> Result<Self> {
-        let mut models = HashMap::new();
+        let mut models: HashMap<String, Box<dyn ModelClient>> = HashMap::new();
 
-        // Initialize Gemini model
-        if let Some(gemini_config) = &config.models.gemini {
-            models.insert("gemini".to_string(), Box::new(GeminiClient::new(gemini_config)?));
+        if let Some(ref cfg) = config.models.gemini {
+            if !cfg.api_key.is_empty() {
+                models.insert("gemini".to_string(), Box::new(GeminiClient::new(cfg)?));
+            }
         }
-
-        // Initialize xAI model
-        if let Some(xai_config) = &config.models.xai {
-            models.insert("xai".to_string(), Box::new(XaiClient::new(xai_config)?));
+        if let Some(ref cfg) = config.models.xai {
+            if !cfg.api_key.is_empty() {
+                models.insert("xai".to_string(), Box::new(XaiClient::new(cfg)?));
+            }
         }
-
-        // Initialize MiniMax model
-        if let Some(minimax_config) = &config.models.minimax {
-            models.insert("minimax".to_string(), Box::new(MiniMaxClient::new(minimax_config)?));
+        if let Some(ref cfg) = config.models.minimax {
+            if !cfg.api_key.is_empty() {
+                models.insert("minimax".to_string(), Box::new(MiniMaxClient::new(cfg)?));
+            }
         }
 
         Ok(Self { models })
     }
 
     pub fn get(&self, model_name: &str) -> Option<&dyn ModelClient> {
-        self.models.get(model_name).map(|client| client.as_ref())
+        self.models.get(model_name).map(|c| c.as_ref())
     }
 
     pub fn list_available(&self) -> Vec<String> {
@@ -41,232 +154,172 @@ impl ModelRegistry {
 
 /// Trait for AI model clients
 #[async_trait::async_trait]
-pub trait ModelClient: Send + Sync {
+pub trait ModelClient: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     async fn search(&self, query: &str) -> Result<ModelSearchResult>;
     async fn generate(&self, prompt: &str) -> Result<String>;
     async fn analyze(&self, text: &str) -> Result<String>;
 }
 
-/// Search result structure
+/// Search result from a single model
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSearchResult {
-    pub results: Vec<SearchItem>,
+    pub results: Vec<ModelSearchItem>,
     pub total_results: Option<usize>,
     pub query: String,
     pub model: String,
 }
 
-/// Individual search item
+/// Individual search item from a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchItem {
+pub struct ModelSearchItem {
     pub id: String,
     pub title: String,
     pub content: String,
     pub url: Option<String>,
-    pub source: String,
     pub relevance: f64,
-    pub published_at: Option<String>,
-    pub metadata: HashMap<String, serde_json::Value>,
+    pub metadata: serde_json::Value,
 }
 
-/// Gemini model configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeminiConfig {
-    pub api_key: String,
-    pub model: String,
-    pub base_url: String,
-    pub max_tokens: usize,
-    pub temperature: f64,
-}
+// ── Gemini client (uses reqwest directly) ────────────────────────────
 
-/// Gemini client implementation
+#[derive(Debug)]
 pub struct GeminiClient {
     config: GeminiConfig,
+    client: reqwest::Client,
 }
 
 impl GeminiClient {
     pub fn new(config: &GeminiConfig) -> Result<Self> {
-        Ok(Self { config: config.clone() })
+        Ok(Self {
+            config: config.clone(),
+            client: reqwest::Client::new(),
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for GeminiClient {
-    fn name(&self) -> &str {
-        "Gemini"
-    }
+    fn name(&self) -> &str { "Gemini" }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        // This is a placeholder implementation
-        // In a real implementation, this would make HTTP requests to Google's Gemini API
-        
-        let search_prompt = format!(
-            "Based on the following query '{}', provide relevant information. Return the results in JSON format with title, content, relevance score (0-1), and any relevant metadata.",
-            query
-        );
-
-        let result = ModelSearchResult {
-            results: vec![
-                SearchItem {
-                    id: "gemini_001".to_string(),
-                    title: format!("Research on {}", query),
-                    content: format!("This is placeholder content for research on {}. In a real implementation, this would contain actual search results from Google Gemini.", query),
-                    url: Some(format!("https://example.com/search?q={}", query)),
-                    source: "gemini".to_string(),
-                    relevance: 0.9,
-                    published_at: Some("2024-01-01".to_string()),
-                    metadata: HashMap::new(),
-                }
-            ],
+        // TODO: Real Gemini API call via reqwest
+        let _ = &self.client;
+        Ok(ModelSearchResult {
+            results: vec![ModelSearchItem {
+                id: "gemini_001".into(),
+                title: format!("Research on {}", query),
+                content: format!("Placeholder Gemini result for: {}", query),
+                url: None,
+                relevance: 0.9,
+                metadata: serde_json::json!({}),
+            }],
             total_results: Some(1),
-            query: query.to_string(),
-            model: self.name().to_string(),
-        };
-
-        Ok(result)
+            query: query.into(),
+            model: self.name().into(),
+        })
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Generated content from Gemini: {}", prompt))
+        Ok(format!("Gemini generation placeholder: {}", prompt))
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Analysis from Gemini: {}", text))
+        Ok(format!("Gemini analysis placeholder: {}", text))
     }
 }
 
-/// xAI model configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct XaiConfig {
-    pub api_key: String,
-    pub model: String,
-    pub base_url: String,
-    pub max_tokens: usize,
-    pub temperature: f64,
-}
+// ── xAI client ───────────────────────────────────────────────────────
 
-/// xAI client implementation
+#[derive(Debug)]
 pub struct XaiClient {
     config: XaiConfig,
+    client: reqwest::Client,
 }
 
 impl XaiClient {
     pub fn new(config: &XaiConfig) -> Result<Self> {
-        Ok(Self { config: config.clone() })
+        Ok(Self {
+            config: config.clone(),
+            client: reqwest::Client::new(),
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for XaiClient {
-    fn name(&self) -> &str {
-        "xAI"
-    }
+    fn name(&self) -> &str { "xAI" }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        // This is a placeholder implementation
-        let search_prompt = format!(
-            "Search the web for information about '{}' using xAI's capabilities.",
-            query
-        );
-
-        let result = ModelSearchResult {
-            results: vec![
-                SearchItem {
-                    id: "xai_001".to_string(),
-                    title: format!("xAI Research on {}", query),
-                    content: format!("This is placeholder content from xAI for research on {}. In a real implementation, this would contain actual search results using xAI's Grok model.", query),
-                    url: Some(format!("https://x.ai/search?q={}", query)),
-                    source: "xai".to_string(),
-                    relevance: 0.85,
-                    published_at: Some("2024-01-02".to_string()),
-                    metadata: HashMap::new(),
-                }
-            ],
+        let _ = &self.client;
+        Ok(ModelSearchResult {
+            results: vec![ModelSearchItem {
+                id: "xai_001".into(),
+                title: format!("xAI Research on {}", query),
+                content: format!("Placeholder xAI result for: {}", query),
+                url: None,
+                relevance: 0.85,
+                metadata: serde_json::json!({}),
+            }],
             total_results: Some(1),
-            query: query.to_string(),
-            model: self.name().to_string(),
-        };
-
-        Ok(result)
+            query: query.into(),
+            model: self.name().into(),
+        })
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Generated content from xAI: {}", prompt))
+        Ok(format!("xAI generation placeholder: {}", prompt))
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Analysis from xAI: {}", text))
+        Ok(format!("xAI analysis placeholder: {}", text))
     }
 }
 
-/// MiniMax model configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MiniMaxConfig {
-    pub api_key: String,
-    pub model: String,
-    pub base_url: String,
-    pub max_tokens: usize,
-    pub temperature: f64,
-}
+// ── MiniMax client ───────────────────────────────────────────────────
 
-/// MiniMax client implementation
+#[derive(Debug)]
 pub struct MiniMaxClient {
     config: MiniMaxConfig,
+    client: reqwest::Client,
 }
 
 impl MiniMaxClient {
     pub fn new(config: &MiniMaxConfig) -> Result<Self> {
-        Ok(Self { config: config.clone() })
+        Ok(Self {
+            config: config.clone(),
+            client: reqwest::Client::new(),
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for MiniMaxClient {
-    fn name(&self) -> &str {
-        "MiniMax"
-    }
+    fn name(&self) -> &str { "MiniMax" }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        // This is a placeholder implementation
-        let search_prompt = format!(
-            "Conduct a comprehensive search about '{}' using MiniMax's AI capabilities.",
-            query
-        );
-
-        let result = ModelSearchResult {
-            results: vec![
-                SearchItem {
-                    id: "minimax_001".to_string(),
-                    title: format!("MiniMax Research on {}", query),
-                    content: format!("This is placeholder content from MiniMax for research on {}. In a real implementation, this would contain actual search results using MiniMax's advanced AI models.", query),
-                    url: Some(format!("https://minimax.chat/search?q={}", query)),
-                    source: "minimax".to_string(),
-                    relevance: 0.88,
-                    published_at: Some("2024-01-03".to_string()),
-                    metadata: HashMap::new(),
-                }
-            ],
+        let _ = &self.client;
+        Ok(ModelSearchResult {
+            results: vec![ModelSearchItem {
+                id: "minimax_001".into(),
+                title: format!("MiniMax Research on {}", query),
+                content: format!("Placeholder MiniMax result for: {}", query),
+                url: None,
+                relevance: 0.88,
+                metadata: serde_json::json!({}),
+            }],
             total_results: Some(1),
-            query: query.to_string(),
-            model: self.name().to_string(),
-        };
-
-        Ok(result)
+            query: query.into(),
+            model: self.name().into(),
+        })
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Generated content from MiniMax: {}", prompt))
+        Ok(format!("MiniMax generation placeholder: {}", prompt))
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        // Placeholder implementation
-        Ok(format!("Analysis from MiniMax: {}", text))
+        Ok(format!("MiniMax analysis placeholder: {}", text))
     }
 }
 
@@ -275,15 +328,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_model_registry_creation() {
+    fn test_registry_with_gemini() {
         let config = Config {
             models: ModelsConfig {
                 gemini: Some(GeminiConfig {
-                    api_key: "test_key".to_string(),
-                    model: "gemini-pro".to_string(),
-                    base_url: "https://generativelanguage.googleapis.com".to_string(),
+                    api_key: "test_key".into(),
+                    model: "gemini-2.0-flash".into(),
+                    base_url: "https://generativelanguage.googleapis.com".into(),
                     max_tokens: 8192,
                     temperature: 0.7,
+                    timeout: Some(30),
                 }),
                 xai: None,
                 minimax: None,
@@ -303,5 +357,13 @@ mod tests {
         let registry = ModelRegistry::new(&config).unwrap();
         assert!(registry.get("gemini").is_some());
         assert_eq!(registry.list_available().len(), 1);
+    }
+
+    #[test]
+    fn test_registry_skips_empty_keys() {
+        let config = Config::default();
+        let registry = ModelRegistry::new(&config).unwrap();
+        // Default has empty api_key strings → no clients registered
+        assert!(registry.list_available().is_empty());
     }
 }

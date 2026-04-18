@@ -1,6 +1,6 @@
 [package]
 name = "open-dsearch"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A cutting-edge research platform for AI agents, protocols, and deep research methodologies"
 authors = ["ejacklab <team@ejacklab.com>"]
@@ -10,58 +10,38 @@ keywords = ["ai", "research", "search", "vector-database", "multi-model"]
 categories = ["science", "database", "web-programming"]
 
 [dependencies]
-# Core dependencies
-tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-anyhow = "1.0"
-thiserror = "1.0"
-clap = { version = "4.0", features = ["derive"] }
+# Core
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Async traits
 async-trait = "0.1"
 
 # Text processing
-regex = "1.0"
+regex = "1"
 
-# HTTP client
-reqwest = { version = "0.11", features = ["json", "stream"] }
+# HTTP client (uses rustls — no system OpenSSL needed)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# Vector database
-zvec = { version = "0.7", optional = true }
-
-# Configuration
-config = "0.13"
+# Config
 toml = "0.8"
 
-# AI model integrations
-# These will be optional features to reduce dependencies
-async-openai = { version = "0.18", optional = true }
-google-gemini-api = { version = "0.1", optional = true }
-minimax-api = { version = "0.1", optional = true }
+# Time
+chrono = { version = "0.4", features = ["serde"] }
 
-# Search and parsing
-select = "0.6"
-scraper = { version = "0.18", optional = true }
-html2text = { version = "0.6", optional = true }
+# Async utilities
+futures = "0.3"
 
-# CLI
+# CLI UX
 dialoguer = "0.11"
 indicatif = "0.17"
 
-[features]
-default = ["gemini", "xai", "minimax", "web-scraper"]
-gemini = ["google-gemini-api"]
-xai = ["async-openai"]
-minimax = ["minimax-api"]
-web-scraper = ["scraper", "html2text"]
-vector-db = ["zvec"]
-
 [dev-dependencies]
 tokio-test = "0.4"
-mockall = "0.11"
 
 [[bin]]
 name = "dsearch"
