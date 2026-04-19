@@ -11,6 +11,8 @@ from .caching.base import CacheBackend, CacheKey
 from .caching.memory_cache import MemoryCache
 from .ranking.scorer import ResultScorer
 from .ranking.dedup import Deduplicator, DedupConfig
+from .fetcher.fetcher import URLFetcher
+from .fetcher.parser import HTMLParser
 from .expansion import QueryExpander
 
 
@@ -22,6 +24,8 @@ class SearchOptions:
     providers: Optional[List[str]] = None
     include_realtime: bool = False
     fetch_content: bool = False
+    fetch_max_concurrent: int = 5
+    fetch_max_results: int = 5
     use_cache: bool = True
     timeout_seconds: float = 30.0
     deduplicate: bool = True
@@ -62,7 +66,9 @@ class SearchOrchestrator:
         cache: Optional[CacheBackend] = None,
         scorer: Optional[ResultScorer] = None,
         deduplicator: Optional[Deduplicator] = None,
-        expander: Optional[QueryExpander] = None
+        expander: Optional[QueryExpander] = None,
+        fetcher: Optional[URLFetcher] = None,
+        parser: Optional[HTMLParser] = None
     ):
         """
         Initialize orchestrator.
@@ -73,12 +79,16 @@ class SearchOrchestrator:
             scorer: Result scorer
             deduplicator: Deduplicator
             expander: Query expander
+            fetcher: URL fetcher for content enrichment
+            parser: HTML parser for content enrichment
         """
         self.providers = providers or []
         self.cache = cache or MemoryCache()
         self.scorer = scorer or ResultScorer()
         self.deduplicator = deduplicator or Deduplicator(DedupConfig())
         self.expander = expander or QueryExpander()
+        self.fetcher = fetcher or URLFetcher()
+        self.parser = parser or HTMLParser()
     
     def add_provider(self, provider: SearchProvider) -> None:
         """Add a search provider."""
@@ -105,6 +115,7 @@ class SearchOrchestrator:
         start_time = time.time()
         
         # Check cache
+        cache_key = None
         if options.use_cache and self.cache:
             cache_key = CacheKey.from_params(
                 query=options.query,
@@ -191,8 +202,16 @@ class SearchOrchestrator:
         # Score and rank
         all_results = self.scorer.score_results(all_results, options.query)
         
+        # Fetch content enrichment for top results
+        if options.fetch_content and all_results:
+            all_results = await self._enrich_with_content(
+                all_results,
+                max_results=options.fetch_max_results,
+                max_concurrent=options.fetch_max_concurrent
+            )
+        
         # Cache results
-        if options.use_cache and self.cache and all_results:
+        if options.use_cache and self.cache and all_results and cache_key:
             await self.cache.set(cache_key, all_results)
         
         execution_time_ms = (time.time() - start_time) * 1000
@@ -206,6 +225,69 @@ class SearchOrchestrator:
             cache_hit=False,
             query_expansions=queries
         )
+    
+    async def _enrich_with_content(
+        self,
+        results: List[SearchResult],
+        max_results: int = 5,
+        max_concurrent: int = 5
+    ) -> List[SearchResult]:
+        """
+        Fetch and parse content for top search results.
+        
+        Uses URLFetcher to retrieve page HTML and HTMLParser to
+        convert it to clean markdown, stored in fetched_content.
+        
+        Args:
+            results: Scored search results (must be sorted by relevance)
+            max_results: Maximum number of results to fetch content for
+            max_concurrent: Maximum concurrent fetches
+            
+        Returns:
+            Results with fetched_content populated where possible
+        """
+        candidates = [r for r in results if r.url and not r.fetched_content]
+        to_fetch = candidates[:max_results]
+        
+        if not to_fetch:
+            return results
+        
+        # Build a lookup so we can update results in-place
+        url_to_result: Dict[str, SearchResult] = {r.url: r for r in to_fetch}
+        urls = list(url_to_result.keys())
+        
+        try:
+            fetch_results = await self.fetcher.fetch_many(
+                urls,
+                max_concurrent=max_concurrent
+            )
+            
+            for fetch_result in fetch_results:
+                if not fetch_result.is_success() or not fetch_result.content:
+                    continue
+                
+                result = url_to_result.get(fetch_result.url)
+                if result is None:
+                    continue
+                
+                # Parse HTML to markdown
+                parsed = self.parser.parse(
+                    fetch_result.content,
+                    base_url=fetch_result.url
+                )
+                
+                if parsed:
+                    result.fetched_content = parsed
+                    # Use the fetched title if the result title is weak
+                    if fetch_result.title and (
+                        not result.title or len(result.title) < 10
+                    ):
+                        result.title = fetch_result.title
+        except Exception:
+            # Content enrichment is best-effort; don't fail the whole search
+            pass
+        
+        return results
     
     async def stream_search(
         self,
@@ -308,7 +390,9 @@ class SearchOrchestrator:
         return results
     
     async def close(self):
-        """Close all providers."""
+        """Close all providers and fetcher."""
         for provider in self.providers:
             if hasattr(provider, 'close'):
                 await provider.close()
+        if self.fetcher:
+            await self.fetcher.close()
