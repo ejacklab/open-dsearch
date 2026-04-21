@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 
 /// Rate limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
