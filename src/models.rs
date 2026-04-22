@@ -1,6 +1,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use reqwest::Client;
+use std::time::Duration;
+use uuid::Uuid;
+use chrono::Utc;
 
 // ── Configuration types ──────────────────────────────────────────────
 
@@ -22,7 +26,7 @@ impl Default for Config {
                     base_url: "https://generativelanguage.googleapis.com".into(),
                     max_tokens: 8192,
                     temperature: 0.7,
-                    timeout: Some(30),
+                    timeout: 30,
                 }),
                 xai: Some(XaiConfig {
                     api_key: String::new(),
@@ -30,15 +34,15 @@ impl Default for Config {
                     base_url: "https://api.x.ai".into(),
                     max_tokens: 4096,
                     temperature: 0.7,
-                    timeout: Some(30),
+                    timeout: 30,
                 }),
                 minimax: Some(MiniMaxConfig {
                     api_key: String::new(),
-                    model: "MiniMax-Text-01".into(),
+                    model: "abab6.5-chat".into(),
                     base_url: "https://api.minimax.chat".into(),
                     max_tokens: 4096,
                     temperature: 0.7,
-                    timeout: Some(30),
+                    timeout: 30,
                 }),
             },
             storage: StorageConfig {
@@ -70,8 +74,7 @@ pub struct GeminiConfig {
     pub base_url: String,
     pub max_tokens: usize,
     pub temperature: f64,
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    pub timeout: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,8 +84,7 @@ pub struct XaiConfig {
     pub base_url: String,
     pub max_tokens: usize,
     pub temperature: f64,
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    pub timeout: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,8 +94,7 @@ pub struct MiniMaxConfig {
     pub base_url: String,
     pub max_tokens: usize,
     pub temperature: f64,
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    pub timeout: u64,
 }
 
 /// Storage configuration
@@ -164,7 +165,7 @@ pub trait ModelClient: Send + Sync + std::fmt::Debug {
 /// Search result from a single model
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSearchResult {
-    pub results: Vec<ModelSearchItem>,
+    pub results: Vec<ResearchItem>,
     pub total_results: Option<usize>,
     pub query: String,
     pub model: String,
@@ -172,155 +173,860 @@ pub struct ModelSearchResult {
 
 /// Individual search item from a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelSearchItem {
+pub struct ResearchItem {
     pub id: String,
     pub title: String,
     pub content: String,
     pub url: Option<String>,
+    pub source: String,
     pub relevance: f64,
+    pub published_at: Option<String>,
     pub metadata: serde_json::Value,
 }
 
-// ── Gemini client (uses reqwest directly) ────────────────────────────
+// ── Gemini client (real implementation) ─────────────────────────────
 
 #[derive(Debug)]
 pub struct GeminiClient {
     config: GeminiConfig,
-    client: reqwest::Client,
+    client: Client,
 }
 
 impl GeminiClient {
     pub fn new(config: &GeminiConfig) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout))
+            .build()?;
+            
         Ok(Self {
             config: config.clone(),
-            client: reqwest::Client::new(),
+            client,
         })
+    }
+
+    /// Generate content using Gemini's generateContent API
+    async fn generate_content(&self, prompt: &str) -> Result<GeminiResponse> {
+        let url = format!("{}{}:generateContent", self.config.base_url, self.config.model);
+        
+        let request = GeminiGenerateRequest {
+            contents: vec![Content {
+                role: "user".to_string(),
+                parts: vec![Part {
+                    text: Some(prompt.to_string()),
+                    file_data: None,
+                }],
+            }],
+            generation_config: Some(GenerationConfig {
+                temperature: Some(self.config.temperature),
+                top_p: Some(0.95),
+                top_k: Some(40),
+                max_output_tokens: Some(self.config.max_tokens as i32),
+                stop_sequences: None,
+            }),
+            safety_settings: None,
+        };
+
+        let response = self.client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &self.config.api_key)
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Gemini API error: {}", error_text));
+        }
+
+        let gemini_response: GeminiResponse = response.json().await?;
+        Ok(gemini_response)
+    }
+
+    /// Extract text from Gemini response
+    fn extract_text_from_response(&self, response: GeminiResponse) -> Result<String> {
+        if let Some(candidate) = response.candidates.first() {
+            if let Some(content) = candidate.content.as_ref() {
+                if let Some(part) = content.parts.first() {
+                    return Ok(part.text.clone().unwrap_or_default());
+                }
+            }
+        }
+        
+        // If content is blocked or empty, return an informative message
+        if let Some(candidate) = response.candidates.first() {
+            if let Some(finish_reason) = &candidate.finish_reason {
+                match finish_reason.as_str() {
+                    "SAFETY" => return Err(anyhow::anyhow!("Content blocked by safety filters")),
+                    "RECITATION" => return Err(anyhow::anyhow!("Content blocked due to recitation policy")),
+                    "OTHER" => return Err(anyhow::anyhow!("Content blocked for other reasons")),
+                    _ => {}
+                }
+            }
+        }
+        
+        Ok("No content generated".to_string())
+    }
+
+    async fn internal_search(&self, query: &str) -> Result<ModelSearchResult> {
+        tracing::info!("Searching with Gemini for: {}", query);
+
+        // Create a search-specific prompt
+        let search_prompt = format!(
+            "You are a research assistant. Search the internet for information about '{}' and provide a comprehensive response.
+            
+            Format your response as a JSON object with the following structure:
+            {{
+                \"results\": [
+                    {{
+                        \"title\": \"Title of the result\",
+                        \"content\": \"Brief summary or key information (2-3 sentences)\",
+                        \"relevance\": 0.9,
+                        \"url\": \"https://example.com\",
+                        \"published_at\": \"2024-01-01\",
+                        \"metadata\": {{}}
+                    }}
+                ]
+            }}
+
+            Focus on accuracy, relevance, and provide specific information about the topic. If you cannot find specific information, acknowledge this limitation and provide what relevant information you can.",
+            query
+        );
+
+        let response = self.generate_content(&search_prompt).await?;
+        let text_response = self.extract_text_from_response(response)?;
+        
+        // Try to parse JSON response, fall back to text parsing
+        let search_items = if let Ok(parsed) = serde_json::from_str::<GeminiSearchResponse>(&text_response) {
+            // Successfully parsed JSON response
+            parsed.results.into_iter().map(|item| ResearchItem {
+                id: format!("gemini_{}", Uuid::new_v4()),
+                title: item.title,
+                content: item.content,
+                url: item.url,
+                source: "gemini".to_string(),
+                relevance: item.relevance,
+                published_at: item.published_at,
+                metadata: serde_json::json!({}),
+            }).collect()
+        } else {
+            // Fallback: treat as general text and create a research result
+            let content = if text_response.len() > 500 {
+                format!("{}...", &text_response[..500])
+            } else {
+                text_response
+            };
+
+            vec![ResearchItem {
+                id: format!("gemini_{}", Uuid::new_v4()),
+                title: format!("Research on {}", query),
+                content,
+                url: None,
+                source: "gemini".to_string(),
+                relevance: 0.8,
+                published_at: Some(Utc::now().to_rfc3339()),
+                metadata: serde_json::json!({"fallback": true}),
+            }]
+        };
+
+        Ok(ModelSearchResult {
+            total_results: Some(search_items.len()),
+            results: search_items,
+            query: query.to_string(),
+            model: "gemini".to_string(),
+        })
+    }
+
+    async fn internal_generate(&self, prompt: &str) -> Result<String> {
+        tracing::info!("Generating content with Gemini for prompt: {}", prompt);
+        
+        let response = self.generate_content(prompt).await?;
+        let text = self.extract_text_from_response(response)?;
+        
+        Ok(text)
+    }
+
+    async fn internal_analyze(&self, text: &str) -> Result<String> {
+        tracing::info!("Analyzing text with Gemini (length: {} chars)", text.len());
+        
+        let analysis_prompt = format!(
+            "Analyze the following text and provide insights, key points, and a summary:
+            
+            Text to analyze:
+            {}
+            
+            Please provide:
+            1. A brief summary (1-2 sentences)
+            2. Key insights or main points
+            3. Any notable observations or analysis
+            4. Overall assessment
+            
+            Format your response in a clear, structured way.",
+            text
+        );
+
+        let response = self.generate_content(&analysis_prompt).await?;
+        let analysis = self.extract_text_from_response(response)?;
+        
+        Ok(analysis)
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for GeminiClient {
-    fn name(&self) -> &str { "Gemini" }
+    fn name(&self) -> &str {
+        "Gemini"
+    }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        // TODO: Real Gemini API call via reqwest
-        let _ = &self.client;
-        Ok(ModelSearchResult {
-            results: vec![ModelSearchItem {
-                id: "gemini_001".into(),
-                title: format!("Research on {}", query),
-                content: format!("Placeholder Gemini result for: {}", query),
-                url: None,
-                relevance: 0.9,
-                metadata: serde_json::json!({}),
-            }],
-            total_results: Some(1),
-            query: query.into(),
-            model: self.name().into(),
-        })
+        self.internal_search(query).await
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        Ok(format!("Gemini generation placeholder: {}", prompt))
+        self.internal_generate(prompt).await
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        Ok(format!("Gemini analysis placeholder: {}", text))
+        self.internal_analyze(text).await
     }
 }
 
-// ── xAI client ───────────────────────────────────────────────────────
+// ── xAI client (real implementation) ───────────────────────────────
 
 #[derive(Debug)]
 pub struct XaiClient {
     config: XaiConfig,
-    client: reqwest::Client,
+    client: Client,
 }
 
 impl XaiClient {
     pub fn new(config: &XaiConfig) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout))
+            .build()?;
+            
         Ok(Self {
             config: config.clone(),
-            client: reqwest::Client::new(),
+            client,
         })
+    }
+
+    async fn internal_search(&self, query: &str) -> Result<ModelSearchResult> {
+        tracing::info!("Searching with xAI for: {}", query);
+
+        let url = format!("{}/v1/chat/completions", self.config.base_url);
+        
+        let request = XaiRequest {
+            model: self.config.model.clone(),
+            messages: vec![XaiMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "You are a research assistant. Search the internet for information about '{}' and provide a comprehensive response.
+                    
+                    Format your response as a JSON object with the following structure:
+                    {{
+                        \"results\": [
+                            {{
+                                \"title\": \"Title of the result\",
+                                \"content\": \"Brief summary or key information (2-3 sentences)\",
+                                \"relevance\": 0.9,
+                                \"url\": \"https://example.com\",
+                                \"published_at\": \"2024-01-01\",
+                                \"metadata\": {{}}
+                            }}
+                        ]
+                    }}
+
+                    Focus on accuracy, relevance, and provide specific information about the topic. If you cannot find specific information, acknowledge this limitation and provide what relevant information you can.
+
+                    Context: The user is asking about: {}",
+                    query, query
+                ),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("xAI API error: {}", error_text));
+        }
+
+        let xai_response: XaiResponse = response.json().await?;
+        let text_response = xai_response.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default();
+        
+        // Try to parse JSON response, fall back to text parsing
+        let search_items = if let Ok(parsed) = serde_json::from_str::<XaiSearchResponse>(&text_response) {
+            parsed.results.into_iter().map(|item| ResearchItem {
+                id: format!("xai_{}", Uuid::new_v4()),
+                title: item.title,
+                content: item.content,
+                url: item.url,
+                source: "xai".to_string(),
+                relevance: item.relevance,
+                published_at: item.published_at,
+                metadata: serde_json::json!({}),
+            }).collect()
+        } else {
+            // Fallback: treat as general text and create a research result
+            let content = if text_response.len() > 500 {
+                format!("{}...", &text_response[..500])
+            } else {
+                text_response
+            };
+
+            vec![ResearchItem {
+                id: format!("xai_{}", Uuid::new_v4()),
+                title: format!("Research on {}", query),
+                content,
+                url: None,
+                source: "xai".to_string(),
+                relevance: 0.85,
+                published_at: Some(Utc::now().to_rfc3339()),
+                metadata: serde_json::json!({"fallback": true}),
+            }]
+        };
+
+        Ok(ModelSearchResult {
+            total_results: Some(search_items.len()),
+            results: search_items,
+            query: query.to_string(),
+            model: "xai".to_string(),
+        })
+    }
+
+    async fn internal_generate(&self, prompt: &str) -> Result<String> {
+        tracing::info!("Generating content with xAI for prompt: {}", prompt);
+        
+        let request = XaiRequest {
+            model: self.config.model.clone(),
+            messages: vec![XaiMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&format!("{}/v1/chat/completions", self.config.base_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("xAI API error: {}", error_text));
+        }
+
+        let xai_response: XaiResponse = response.json().await?;
+        Ok(xai_response.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default())
+    }
+
+    async fn internal_analyze(&self, text: &str) -> Result<String> {
+        tracing::info!("Analyzing text with xAI (length: {} chars)", text.len());
+        
+        let request = XaiRequest {
+            model: self.config.model.clone(),
+            messages: vec![XaiMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "Analyze the following text and provide insights, key points, and a summary:
+                    
+                    Text to analyze:
+                    {}
+                    
+                    Please provide:
+                    1. A brief summary (1-2 sentences)
+                    2. Key insights or main points
+                    3. Any notable observations or analysis
+                    4. Overall assessment
+                    
+                    Format your response in a clear, structured way.",
+                    text
+                ),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&format!("{}/v1/chat/completions", self.config.base_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("xAI API error: {}", error_text));
+        }
+
+        let xai_response: XaiResponse = response.json().await?;
+        Ok(xai_response.choices.first().and_then(|c| c.message.content.clone()).unwrap_or_default())
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for XaiClient {
-    fn name(&self) -> &str { "xAI" }
+    fn name(&self) -> &str {
+        "xAI"
+    }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        let _ = &self.client;
-        Ok(ModelSearchResult {
-            results: vec![ModelSearchItem {
-                id: "xai_001".into(),
-                title: format!("xAI Research on {}", query),
-                content: format!("Placeholder xAI result for: {}", query),
-                url: None,
-                relevance: 0.85,
-                metadata: serde_json::json!({}),
-            }],
-            total_results: Some(1),
-            query: query.into(),
-            model: self.name().into(),
-        })
+        self.internal_search(query).await
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        Ok(format!("xAI generation placeholder: {}", prompt))
+        self.internal_generate(prompt).await
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        Ok(format!("xAI analysis placeholder: {}", text))
+        self.internal_analyze(text).await
     }
 }
 
-// ── MiniMax client ───────────────────────────────────────────────────
+// ── MiniMax client (real implementation) ───────────────────────────
 
 #[derive(Debug)]
 pub struct MiniMaxClient {
     config: MiniMaxConfig,
-    client: reqwest::Client,
+    client: Client,
 }
 
 impl MiniMaxClient {
     pub fn new(config: &MiniMaxConfig) -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout))
+            .build()?;
+            
         Ok(Self {
             config: config.clone(),
-            client: reqwest::Client::new(),
+            client,
         })
+    }
+
+    async fn internal_search(&self, query: &str) -> Result<ModelSearchResult> {
+        tracing::info!("Searching with MiniMax for: {}", query);
+
+        let url = format!("{}/v1/text/chatcompletion", self.config.base_url);
+        
+        let request = MiniMaxRequest {
+            model: self.config.model.clone(),
+            messages: vec![MiniMaxMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "You are a research assistant. Search the internet for information about '{}' and provide a comprehensive response.
+                    
+                    Format your response as a JSON object with the following structure:
+                    {{
+                        \"results\": [
+                            {{
+                                \"title\": \"Title of the result\",
+                                \"content\": \"Brief summary or key information (2-3 sentences)\",
+                                \"relevance\": 0.9,
+                                \"url\": \"https://example.com\",
+                                \"published_at\": \"2024-01-01\",
+                                \"metadata\": {{}}
+                            }}
+                        ]
+                    }}
+
+                    Focus on accuracy, relevance, and provide specific information about the topic. If you cannot find specific information, acknowledge this limitation and provide what relevant information you can.
+
+                    Context: The user is asking about: {}",
+                    query, query
+                ),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("MiniMax API error: {}", error_text));
+        }
+
+        let minimax_response: MiniMaxResponse = response.json().await?;
+        let text_response = minimax_response.reply.choices.first().and_then(|c| c.delta.content.clone()).unwrap_or_default();
+        
+        // Try to parse JSON response, fall back to text parsing
+        let search_items = if let Ok(parsed) = serde_json::from_str::<MiniMaxSearchResponse>(&text_response) {
+            parsed.results.into_iter().map(|item| ResearchItem {
+                id: format!("minimax_{}", Uuid::new_v4()),
+                title: item.title,
+                content: item.content,
+                url: item.url,
+                source: "minimax".to_string(),
+                relevance: item.relevance,
+                published_at: item.published_at,
+                metadata: serde_json::json!({}),
+            }).collect()
+        } else {
+            // Fallback: treat as general text and create a research result
+            let content = if text_response.len() > 500 {
+                format!("{}...", &text_response[..500])
+            } else {
+                text_response
+            };
+
+            vec![ResearchItem {
+                id: format!("minimax_{}", Uuid::new_v4()),
+                title: format!("Research on {}", query),
+                content,
+                url: None,
+                source: "minimax".to_string(),
+                relevance: 0.88,
+                published_at: Some(Utc::now().to_rfc3339()),
+                metadata: serde_json::json!({"fallback": true}),
+            }]
+        };
+
+        Ok(ModelSearchResult {
+            total_results: Some(search_items.len()),
+            results: search_items,
+            query: query.to_string(),
+            model: "minimax".to_string(),
+        })
+    }
+
+    async fn internal_generate(&self, prompt: &str) -> Result<String> {
+        tracing::info!("Generating content with MiniMax for prompt: {}", prompt);
+        
+        let request = MiniMaxRequest {
+            model: self.config.model.clone(),
+            messages: vec![MiniMaxMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&format!("{}/v1/text/chatcompletion", self.config.base_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("MiniMax API error: {}", error_text));
+        }
+
+        let minimax_response: MiniMaxResponse = response.json().await?;
+        Ok(minimax_response.reply.choices.first().and_then(|c| c.delta.content.clone()).unwrap_or_default())
+    }
+
+    async fn internal_analyze(&self, text: &str) -> Result<String> {
+        tracing::info!("Analyzing text with MiniMax (length: {} chars)", text.len());
+        
+        let request = MiniMaxRequest {
+            model: self.config.model.clone(),
+            messages: vec![MiniMaxMessage {
+                role: "user".to_string(),
+                content: format!(
+                    "Analyze the following text and provide insights, key points, and a summary:
+                    
+                    Text to analyze:
+                    {}
+                    
+                    Please provide:
+                    1. A brief summary (1-2 sentences)
+                    2. Key insights or main points
+                    3. Any notable observations or analysis
+                    4. Overall assessment
+                    
+                    Format your response in a clear, structured way.",
+                    text
+                ),
+            }],
+            max_tokens: self.config.max_tokens,
+            temperature: self.config.temperature,
+        };
+
+        let response = self.client
+            .post(&format!("{}/v1/text/chatcompletion", self.config.base_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("MiniMax API error: {}", error_text));
+        }
+
+        let minimax_response: MiniMaxResponse = response.json().await?;
+        Ok(minimax_response.reply.choices.first().and_then(|c| c.delta.content.clone()).unwrap_or_default())
     }
 }
 
 #[async_trait::async_trait]
 impl ModelClient for MiniMaxClient {
-    fn name(&self) -> &str { "MiniMax" }
+    fn name(&self) -> &str {
+        "MiniMax"
+    }
 
     async fn search(&self, query: &str) -> Result<ModelSearchResult> {
-        let _ = &self.client;
-        Ok(ModelSearchResult {
-            results: vec![ModelSearchItem {
-                id: "minimax_001".into(),
-                title: format!("MiniMax Research on {}", query),
-                content: format!("Placeholder MiniMax result for: {}", query),
-                url: None,
-                relevance: 0.88,
-                metadata: serde_json::json!({}),
-            }],
-            total_results: Some(1),
-            query: query.into(),
-            model: self.name().into(),
-        })
+        self.internal_search(query).await
     }
 
     async fn generate(&self, prompt: &str) -> Result<String> {
-        Ok(format!("MiniMax generation placeholder: {}", prompt))
+        self.internal_generate(prompt).await
     }
 
     async fn analyze(&self, text: &str) -> Result<String> {
-        Ok(format!("MiniMax analysis placeholder: {}", text))
+        self.internal_analyze(text).await
     }
+}
+
+// ── API structures ──────────────────────────────────────────────────
+
+// Gemini API structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiGenerateRequest {
+    pub contents: Vec<Content>,
+    pub generation_config: Option<GenerationConfig>,
+    pub safety_settings: Option<Vec<SafetySetting>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Content {
+    pub role: String,
+    pub parts: Vec<Part>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Part {
+    pub text: Option<String>,
+    pub file_data: Option<FileData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileData {
+    pub mime_type: String,
+    pub file_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationConfig {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i32>,
+    pub max_output_tokens: Option<i32>,
+    pub stop_sequences: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetySetting {
+    pub category: String,
+    pub threshold: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiResponse {
+    pub candidates: Vec<Candidate>,
+    pub usage_metadata: Option<UsageMetadata>,
+    pub prompt_feedback: Option<PromptFeedback>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Candidate {
+    pub content: Option<Content>,
+    pub finish_reason: Option<String>,
+    pub safety_ratings: Option<Vec<SafetyRating>>,
+    pub citation_metadata: Option<CitationMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyRating {
+    pub category: String,
+    pub probability: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CitationMetadata {
+    pub citation_sources: Vec<CitationSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CitationSource {
+    pub start_index: i32,
+    pub end_index: i32,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageMetadata {
+    pub prompt_token_count: i32,
+    pub candidates_token_count: i32,
+    pub total_token_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptFeedback {
+    pub safety_ratings: Vec<SafetyRating>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiSearchResponse {
+    pub results: Vec<GeminiSearchItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiSearchItem {
+    pub title: String,
+    pub content: String,
+    pub relevance: f64,
+    pub url: Option<String>,
+    pub published_at: Option<String>,
+}
+
+// xAI API structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiRequest {
+    pub model: String,
+    pub messages: Vec<XaiMessage>,
+    pub max_tokens: usize,
+    pub temperature: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiResponse {
+    pub id: String,
+    pub object: String,
+    pub created: i64,
+    pub model: String,
+    pub choices: Vec<XaiChoice>,
+    pub usage: XaiUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiChoice {
+    pub index: i32,
+    pub message: XaiMessageContent,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiMessageContent {
+    pub role: String,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiUsage {
+    pub prompt_tokens: i32,
+    pub completion_tokens: i32,
+    pub total_tokens: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiSearchResponse {
+    pub results: Vec<XaiSearchItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XaiSearchItem {
+    pub title: String,
+    pub content: String,
+    pub relevance: f64,
+    pub url: Option<String>,
+    pub published_at: Option<String>,
+}
+
+// MiniMax API structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxRequest {
+    pub model: String,
+    pub messages: Vec<MiniMaxMessage>,
+    pub max_tokens: usize,
+    pub temperature: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxResponse {
+    pub base_resp: BaseResp,
+    pub reply: MiniMaxReply,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseResp {
+    pub status_code: i32,
+    pub status_msg: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxReply {
+    pub choices: Vec<MiniMaxChoice>,
+    pub usage: MiniMaxUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxChoice {
+    pub delta: MiniMaxDelta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxDelta {
+    pub role: String,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxUsage {
+    pub prompt_tokens: i32,
+    pub completion_tokens: i32,
+    pub total_tokens: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxSearchResponse {
+    pub results: Vec<MiniMaxSearchItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniMaxSearchItem {
+    pub title: String,
+    pub content: String,
+    pub relevance: f64,
+    pub url: Option<String>,
+    pub published_at: Option<String>,
 }
 
 #[cfg(test)]
@@ -337,7 +1043,7 @@ mod tests {
                     base_url: "https://generativelanguage.googleapis.com".into(),
                     max_tokens: 8192,
                     temperature: 0.7,
-                    timeout: Some(30),
+                    timeout: 30,
                 }),
                 xai: None,
                 minimax: None,

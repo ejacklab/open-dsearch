@@ -39,6 +39,7 @@ futures = "0.3"
 # CLI UX
 dialoguer = "0.11"
 indicatif = "0.17"
+uuid = { version = "1.23.1", features = ["v4"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
