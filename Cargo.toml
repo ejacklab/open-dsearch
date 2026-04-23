@@ -25,7 +25,7 @@ async-trait = "0.1"
 regex = "1"
 
 # HTTP client (uses rustls — no system OpenSSL needed)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Config
 toml = "0.8"
@@ -35,6 +35,11 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Async utilities
 futures = "0.3"
+
+# Web scraping
+scraper = "0.19"
+select = "0.6"
+html2text = "0.6"
 
 # CLI UX
 dialoguer = "0.11"

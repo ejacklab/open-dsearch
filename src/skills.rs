@@ -2,11 +2,16 @@ use crate::models::SkillsConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use reqwest::Client;
+use scraper::{Html, Selector};
+use std::time::Duration;
+use tokio::time::sleep;
 
 /// Skills registry for managing research skills
 #[derive(Debug)]
 pub struct SkillsRegistry {
     skills: HashMap<String, Box<dyn Skill>>,
+    #[allow(dead_code)]
     config: SkillsConfig,
 }
 
@@ -113,19 +118,153 @@ pub struct SchemaParameter {
     pub enum_values: Option<Vec<String>>,
 }
 
-/// Web research skill
+/// Web research skill with real web scraping capabilities
 #[derive(Debug)]
 pub struct WebResearchSkill {
     name: String,
     description: String,
+    client: Client,
 }
 
 impl WebResearchSkill {
     fn new() -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("OpenDSearch/1.0 (Research Bot; +https://github.com/ejacklab/open-dsearch)")
+            .build()
+            .expect("Failed to build HTTP client");
+        
         Self {
             name: "web-research".to_string(),
             description: "Automated web scraping and analysis".to_string(),
+            client,
         }
+    }
+
+    /// Fetch and extract content from a URL
+    async fn fetch_url(&self, url: &str) -> Result<String> {
+        let response = self.client.get(url).send().await?;
+        let status = response.status();
+        
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("HTTP {} for {}", status, url));
+        }
+        
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("text/html");
+        
+        if !content_type.contains("text/html") {
+            return Err(anyhow::anyhow!("Non-HTML content type: {}", content_type));
+        }
+        
+        let html = response.text().await?;
+        let text = self.extract_text(&html);
+        
+        Ok(text)
+    }
+
+    /// Extract clean text from HTML
+    fn extract_text(&self, html: &str) -> String {
+        let document = Html::parse_document(html);
+        
+        // Try to get main content first
+        let main_selectors = [
+            "main",
+            "article",
+            "[role='main']",
+            ".content",
+            "#content",
+            ".post-content",
+            ".entry-content",
+            ".article-content",
+        ];
+        
+        for selector_str in &main_selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(element) = document.select(&selector).next() {
+                    let text: String = element.text().collect();
+                    return self.clean_text(&text);
+                }
+            }
+        }
+        
+        // Fallback to body content
+        if let Ok(body_selector) = Selector::parse("body") {
+            if let Some(body) = document.select(&body_selector).next() {
+                let text: String = body.text().collect();
+                return self.clean_text(&text);
+            }
+        }
+        
+        // Last resort: all text
+        let text: String = document.root_element().text().collect();
+        self.clean_text(&text)
+    }
+
+    /// Clean and normalize extracted text
+    fn clean_text(&self, text: &str) -> String {
+        text.lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .filter(|line| !line.starts_with("<!--"))
+            .filter(|line| line.len() > 10) // Filter out very short lines
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace("\n\n\n", "\n\n") // Remove excessive newlines
+    }
+
+    /// Extract metadata from HTML
+    #[allow(dead_code)]
+    fn extract_metadata(&self, html: &str) -> HashMap<String, String> {
+        let document = Html::parse_document(html);
+        let mut metadata = HashMap::new();
+        
+        // Title
+        if let Ok(title_selector) = Selector::parse("title") {
+            if let Some(title) = document.select(&title_selector).next() {
+                metadata.insert("title".to_string(), title.text().collect::<String>().trim().to_string());
+            }
+        }
+        
+        // Meta description
+        if let Ok(desc_selector) = Selector::parse("meta[name='description']") {
+            if let Some(desc) = document.select(&desc_selector).next() {
+                if let Some(content) = desc.value().attr("content") {
+                    metadata.insert("description".to_string(), content.to_string());
+                }
+            }
+        }
+        
+        metadata
+    }
+
+    /// Check robots.txt (basic implementation)
+    async fn check_robots_txt(&self, url: &str) -> Result<bool> {
+        // Parse URL to get base domain
+        if let Ok(parsed) = url.parse::<reqwest::Url>() {
+            if let Some(host) = parsed.host_str() {
+                let robots_url = format!("{}://{}/robots.txt", parsed.scheme(), host);
+                
+                match self.client.get(&robots_url).send().await {
+                    Ok(response) if response.status().is_success() => {
+                        if let Ok(content) = response.text().await {
+                            // Check if the path is disallowed
+                            let path = parsed.path();
+                            return Ok(!content.contains(&format!("Disallow: {}", path)));
+                        }
+                    }
+                    _ => {
+                        // If robots.txt doesn't exist or fails, assume allowed
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        
+        Ok(true)
     }
 }
 
@@ -142,17 +281,102 @@ impl Skill for WebResearchSkill {
     async fn execute(&self, context: SkillContext) -> Result<SkillResult> {
         println!("🌐 Executing web research for: {}", context.query);
         
-        // Placeholder implementation - would actually perform web scraping
-        let analysis = format!(
-            "Web research completed for query: {}\n\nThis would:\n1. Search the web using multiple search engines\n2. Scrape and analyze relevant pages\n3. Extract key information and insights\n4. Cite sources and provide references\n\nQuery parameters: {:?}", 
-            context.query, context.parameters
+        // Get URLs to scrape from parameters or use a mock list for now
+        let urls: Vec<String> = context.parameters
+            .get("urls")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                // For demonstration, we'll note that real implementation would
+                // use a search API or web search to get URLs
+                vec![]
+            });
+        
+        let mut scraped_results = Vec::new();
+        let mut errors = Vec::new();
+        
+        for url in urls.iter().take(5) { // Limit to 5 URLs
+            println!("  📄 Fetching: {}", url);
+            
+            // Rate limiting - be polite
+            sleep(Duration::from_millis(1000)).await;
+            
+            // Check robots.txt
+            match self.check_robots_txt(url).await {
+                Ok(false) => {
+                    println!("  ⛔ Blocked by robots.txt: {}", url);
+                    continue;
+                }
+                Ok(true) => {}
+                Err(e) => {
+                    println!("  ⚠️  Could not check robots.txt: {}", e);
+                }
+            }
+            
+            // Fetch and extract content
+            match self.fetch_url(url).await {
+                Ok(content) => {
+                    let summary = if content.len() > 500 {
+                        format!("{}...", &content[..500])
+                    } else {
+                        content.clone()
+                    };
+                    
+                    scraped_results.push(format!("\nSource: {}\n---\n{}", url, summary));
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", url, e));
+                }
+            }
+        }
+        
+        // Build the analysis
+        let mut analysis = format!(
+            "🔍 Web Research Results for: {}\n\n",
+            context.query
         );
+        
+        if scraped_results.is_empty() {
+            analysis.push_str("No URLs were scraped. To use web research, provide URLs in the 'urls' parameter.\n\n");
+            analysis.push_str("Example usage:\n");
+            analysis.push_str("{\"urls\": [\"https://example.com/article1\", \"https://example.com/article2\"]}\n");
+        } else {
+            analysis.push_str(&format!("Successfully scraped {} of {} URLs\n\n", 
+                scraped_results.len(), urls.len()));
+            
+            for result in &scraped_results {
+                analysis.push_str(result);
+                analysis.push_str("\n\n");
+            }
+        }
+        
+        if !errors.is_empty() {
+            analysis.push_str("\n⚠️ Errors encountered:\n");
+            for error in errors {
+                analysis.push_str(&format!("  - {}\n", error));
+            }
+        }
+        
+        // Add next actions based on results
+        let next_actions = if scraped_results.len() >= 3 {
+            vec!["data-analysis".to_string(), "literature-review".to_string()]
+        } else {
+            vec!["web-research".to_string()] // Suggest trying again with more sources
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert("urls_scraped".to_string(), serde_json::json!(scraped_results.len()));
+        metadata.insert("urls_attempted".to_string(), serde_json::json!(urls.len()));
 
         Ok(SkillResult {
             output: analysis,
-            artifacts: vec!["web-research-summary.md".to_string()],
-            next_actions: vec!["literature-review".to_string(), "data-analysis".to_string()],
-            metadata: HashMap::new(),
+            artifacts: vec!["web-research-results.md".to_string()],
+            next_actions,
+            metadata,
         })
     }
 

@@ -519,7 +519,7 @@ mod tests {
         let mut limiter = RateLimiter::new(config);
         
         // Should be able to make 3 requests immediately
-        for i in 0..3 {
+        for _i in 0..3 {
             assert!(limiter.can_proceed().await);
         }
         
