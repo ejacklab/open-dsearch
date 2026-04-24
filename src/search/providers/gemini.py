@@ -1,7 +1,7 @@
 """Google Gemini search provider."""
 
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 import aiohttp
 
 from .base import SearchProvider, ProviderConfig, SearchResult, ProviderStatus
@@ -115,16 +115,38 @@ class GeminiProvider(SearchProvider):
         grounding = candidates[0].get("groundingMetadata", {})
         chunks = grounding.get("groundingChunks", [])
         
-        for chunk in chunks[:limit]:
+        # Build snippet lookup from groundingSupports
+        # Each support maps a text segment to the chunks it references
+        chunk_snippets: Dict[int, str] = {}
+        for support in grounding.get("groundingSupports", []):
+            segment_text = support.get("segment", {}).get("text", "").strip()
+            for chunk_idx in support.get("groundingChunkIndices", []):
+                existing = chunk_snippets.get(chunk_idx, "")
+                if segment_text and len(segment_text) > len(existing):
+                    chunk_snippets[chunk_idx] = segment_text
+        
+        # Also extract the model's text response for fallback snippets
+        model_text = ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        for part in parts:
+            if "text" in part:
+                model_text += part["text"]
+        
+        for idx, chunk in enumerate(chunks[:limit]):
             web = chunk.get("web", {})
             title = web.get("title", "").strip()
             uri = web.get("uri", "").strip()
             
             if title and uri:
+                # Use extracted snippet, or fallback
+                snippet = chunk_snippets.get(idx, "")
+                if not snippet:
+                    snippet = f"Source for: {query}"
+                
                 results.append(SearchResult(
                     title=title,
                     url=uri,
-                    snippet=f"Source for: {query}",
+                    snippet=snippet,
                     source=self.name,
                     metadata={
                         "provider": "gemini",
@@ -154,6 +176,12 @@ class GeminiProvider(SearchProvider):
         except Exception:
             return ProviderStatus.DOWN
     
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
     async def close(self):
         """Close HTTP session."""
         if self._session and not self._session.closed:

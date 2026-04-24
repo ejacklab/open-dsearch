@@ -6,6 +6,7 @@ from .base import SearchProvider, ProviderConfig
 from .gemini import GeminiProvider
 from .minimax import MiniMaxProvider
 from .kimi import KimiProvider
+from .xai import XaiProvider
 
 
 class ProviderRegistry:
@@ -15,6 +16,7 @@ class ProviderRegistry:
         "gemini": GeminiProvider,
         "minimax": MiniMaxProvider,
         "kimi": KimiProvider,
+        "xai": XaiProvider,
     }
     
     @classmethod

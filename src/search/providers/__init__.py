@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from .gemini import GeminiProvider
     from .minimax import MiniMaxProvider
     from .kimi import KimiProvider
+    from .xai import XaiProvider
     from .registry import ProviderRegistry
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "GeminiProvider",
     "MiniMaxProvider",
     "KimiProvider",
+    "XaiProvider",
     "ProviderRegistry",
 ]
 
@@ -43,6 +45,9 @@ def __getattr__(name: str):
     if name == "KimiProvider":
         from .kimi import KimiProvider
         return KimiProvider
+    if name == "XaiProvider":
+        from .xai import XaiProvider
+        return XaiProvider
     if name == "ProviderRegistry":
         from .registry import ProviderRegistry
         return ProviderRegistry

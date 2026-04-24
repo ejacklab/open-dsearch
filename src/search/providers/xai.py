@@ -235,6 +235,12 @@ Context: The user is asking about: {query}
         except Exception:
             return ProviderStatus.DOWN
     
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
     async def close(self):
         """Close HTTP session."""
         if self._session and not self._session.closed:
