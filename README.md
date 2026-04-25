@@ -6,7 +6,7 @@ A cutting-edge research platform for AI agents, protocols, and deep research met
 
 Open DSearch combines advanced search capabilities with vector storage and multi-model AI integration for comprehensive research automation. It provides:
 
-- **Multi-Model Search**: Integration with xAI (Grok), Gemini, and MiniMax APIs
+- **Multi-Model Search**: Integration with xAI (Grok), Gemini, MiniMax, Brave Search, and Kimi APIs
 - **Vector Storage**: ZVec for persistent research data and semantic search
 - **Modular Skills**: Claude Code skills for specialized research tasks
 - **Rust Performance**: Fast research tools with Python fallbacks
