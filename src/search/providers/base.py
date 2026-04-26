@@ -76,6 +76,9 @@ class ProviderConfig:
     priority: int = 1
     extra_headers: Optional[Dict[str, str]] = None
     base_url: Optional[str] = None
+    model: Optional[str] = None
+    max_tokens: int = 2048
+    temperature: float = 0.0
     
     def __post_init__(self):
         """Initialize extra headers if None."""
