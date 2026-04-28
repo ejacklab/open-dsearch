@@ -23,7 +23,11 @@ impl DSearch {
     pub fn new(config: Config) -> Result<Self> {
         let models = ModelRegistry::new(&config)?;
         let storage = if config.storage.enabled {
-            Some(VectorStorage::new(&config.storage)?)
+            // Try to load existing storage or create empty
+            match VectorStorage::new(&config.storage) {
+                Ok(storage) => Some(storage),
+                Err(_) => Some(VectorStorage::new_empty(&config.storage)?),
+            }
         } else {
             None
         };

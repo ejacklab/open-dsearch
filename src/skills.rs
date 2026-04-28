@@ -124,6 +124,7 @@ pub struct WebResearchSkill {
     name: String,
     description: String,
     client: Client,
+    search_providers: Vec<String>,
 }
 
 impl WebResearchSkill {
@@ -138,6 +139,7 @@ impl WebResearchSkill {
             name: "web-research".to_string(),
             description: "Automated web scraping and analysis".to_string(),
             client,
+            search_providers: vec!["google".to_string(), "bing".to_string(), "duckduckgo".to_string()],
         }
     }
 
