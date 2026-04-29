@@ -6,6 +6,7 @@ from datetime import datetime
 
 from src.search.caching.base import CacheKey
 from src.search.caching.memory_cache import MemoryCache
+from src.search.caching.sqlite_cache import SQLiteCache
 from src.search.providers.base import SearchResult
 
 
