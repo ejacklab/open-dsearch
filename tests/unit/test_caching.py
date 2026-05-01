@@ -1,5 +1,7 @@
 """Unit tests for caching."""
 
+import sqlite3
+import time
 import pytest
 import asyncio
 from datetime import datetime
@@ -251,3 +253,86 @@ class TestSQLiteCache:
         assert stats["type"] == "sqlite"
         assert "db_path" in stats
         assert "size" in stats
+
+    @pytest.mark.asyncio
+    async def test_expiration(self, tmp_path):
+        """Test that expired entries return None."""
+        db_path = tmp_path / "test_cache.db"
+        cache = SQLiteCache(db_path=db_path)
+        
+        key = CacheKey.from_params("query", ["gemini"], 10)
+        results = [SearchResult("Title", "https://example.com", "Snippet", "gemini")]
+        
+        await cache.set(key, results, ttl_seconds=1)
+        await asyncio.sleep(1.1)
+        
+        cached = await cache.get(key)
+        assert cached is None
+
+    @pytest.mark.asyncio
+    async def test_clear_expired(self, tmp_path):
+        """Test clearing expired entries."""
+        db_path = tmp_path / "test_cache.db"
+        cache = SQLiteCache(db_path=db_path)
+        
+        key = CacheKey.from_params("query", ["gemini"], 10)
+        results = [SearchResult("T", "https://example.com", "S", "gemini")]
+        
+        await cache.set(key, results, ttl_seconds=1)
+        await asyncio.sleep(2.0)
+        
+        cleared = await cache.clear_expired()
+        assert cleared >= 1
+        
+        stats = await cache.get_stats()
+        assert stats["size"] == 0
+
+    @pytest.mark.asyncio
+    async def test_upsert_overwrite(self, tmp_path):
+        """Test that set overwrites existing entry."""
+        db_path = tmp_path / "test_cache.db"
+        cache = SQLiteCache(db_path=db_path)
+        
+        key = CacheKey.from_params("query", ["gemini"], 10)
+        r1 = [SearchResult("Title1", "https://1.com", "S1", "gemini")]
+        r2 = [SearchResult("Title2", "https://2.com", "S2", "gemini")]
+        
+        await cache.set(key, r1)
+        await cache.set(key, r2)
+        
+        cached = await cache.get(key)
+        assert cached is not None
+        assert cached[0].title == "Title2"
+
+    @pytest.mark.asyncio
+    async def test_invalidate_all(self, tmp_path):
+        """Test invalidating all entries."""
+        db_path = tmp_path / "test_cache.db"
+        cache = SQLiteCache(db_path=db_path)
+        
+        for i in range(3):
+            key = CacheKey.from_params(f"query{i}", ["gemini"], 10)
+            await cache.set(key, [SearchResult(f"T{i}", f"https://{i}.com", "S", "gemini")])
+        
+        count = await cache.invalidate()
+        assert count == 3
+        assert (await cache.get_stats())["size"] == 0
+
+    @pytest.mark.asyncio
+    async def test_corrupt_data_handling(self, tmp_path):
+        """Test that corrupt JSON data returns empty list gracefully."""
+        db_path = tmp_path / "test_cache.db"
+        cache = SQLiteCache(db_path=db_path)
+        
+        # Inject corrupt data directly
+        key_str = CacheKey.from_params("query", ["gemini"], 10).to_string()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO search_cache (key, query_text, data, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            (key_str, "query", "NOT_JSON!!!", time.time() + 3600, time.time())
+        )
+        conn.commit()
+        conn.close()
+        
+        cached = await cache.get(CacheKey.from_params("query", ["gemini"], 10))
+        assert cached == []
