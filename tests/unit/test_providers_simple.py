@@ -57,14 +57,14 @@ class TestSearchResult:
     
     def test_from_dict(self):
         """Test creating from dictionary."""
-        from datetime import datetime
+        from datetime import datetime, timezone
         data = {
             "title": "Test",
             "url": "https://example.com",
             "snippet": "Snippet",
             "source": "test",
             "score": 0.5,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         result = SearchResult.from_dict(data)

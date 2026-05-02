@@ -1,7 +1,7 @@
 """Unit tests for provider abstraction module."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from src.shared.provider import (
@@ -85,7 +85,7 @@ class TestSearchResult:
             "snippet": "Snippet",
             "source": "provider",
             "score": 0.8,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         result = SearchResult.from_dict(data)

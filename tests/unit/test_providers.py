@@ -1,7 +1,7 @@
 """Unit tests for search providers."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import Mock, AsyncMock, patch
 
 from src.search.providers.base import (
@@ -59,7 +59,7 @@ class TestSearchResult:
             "snippet": "Snippet",
             "source": "test",
             "score": 0.5,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         result = SearchResult.from_dict(data)
@@ -114,7 +114,7 @@ class TestProviderHealth:
         health.status = ProviderStatus.DEGRADED
         
         # Record success
-        health.last_success = datetime.now()
+        health.last_success = datetime.now(timezone.utc)
         health.consecutive_failures = 0
         health.successful_requests = 1
         health.total_requests = 1
@@ -128,7 +128,7 @@ class TestProviderHealth:
         
         health.consecutive_failures = 4
         health.total_requests = 4
-        health.last_failure = datetime.now()
+        health.last_failure = datetime.now(timezone.utc)
         
         # After 5 failures, status should be DOWN
         health.consecutive_failures = 5

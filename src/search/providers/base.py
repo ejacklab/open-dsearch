@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any, List
 
@@ -30,7 +30,7 @@ class SearchResult:
     def __post_init__(self):
         """Ensure timestamp is set."""
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            self.timestamp = datetime.now(timezone.utc)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -52,7 +52,7 @@ class SearchResult:
             try:
                 timestamp = datetime.fromisoformat(data["timestamp"])
             except (ValueError, TypeError):
-                timestamp = datetime.now()
+                timestamp = datetime.now(timezone.utc)
         
         return cls(
             title=data["title"],
@@ -161,7 +161,7 @@ class SearchProvider(ABC):
     
     def record_success(self, latency_ms: float):
         """Record successful request."""
-        self._health.last_success = datetime.now()
+        self._health.last_success = datetime.now(timezone.utc)
         self._health.consecutive_failures = 0
         self._health.total_requests += 1
         self._health.successful_requests += 1
@@ -183,7 +183,7 @@ class SearchProvider(ABC):
     
     def record_failure(self, error: Optional[Exception] = None):
         """Record failed request."""
-        self._health.last_failure = datetime.now()
+        self._health.last_failure = datetime.now(timezone.utc)
         self._health.consecutive_failures += 1
         self._health.total_requests += 1
         

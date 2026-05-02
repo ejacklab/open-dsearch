@@ -7,7 +7,7 @@ along with common data structures and a provider registry.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Callable, AsyncIterator
 from pathlib import Path
@@ -81,7 +81,7 @@ class SearchResult:
     score: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     fetched_content: Optional[str] = None
-    timestamp: Optional[datetime] = field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary."""
