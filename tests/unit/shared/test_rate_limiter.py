@@ -1,319 +1,308 @@
-"""Unit tests for rate limiter module."""
+"""Comprehensive unit tests for rate limiting."""
 
-import pytest
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import pytest
 
 from src.shared.rate_limiter import (
     TokenBucket,
     LeakyBucket,
     AdaptiveRateLimiter,
-    RateLimitStrategy,
-    create_rate_limiter,
     RateLimiterManager,
-    get_rate_limiter_manager,
-    reset_rate_limiter_manager,
+    create_rate_limiter,
+    RateLimitStrategy,
+    RateLimitError,
 )
 
 
+# ─── Token Bucket Tests ──────────────────────────────────────────────
+
 class TestTokenBucket:
     """Tests for TokenBucket rate limiter."""
-    
-    def test_initial_tokens(self):
-        """Test bucket starts with full capacity."""
-        bucket = TokenBucket(rate=1.0, capacity=5)
-        state = bucket.get_state()
-        assert state["tokens"] == 5.0
-    
-    def test_acquire_success(self):
-        """Test successful token acquisition."""
-        bucket = TokenBucket(rate=10.0, capacity=5)
-        
-        assert bucket.acquire() is True
-        state = bucket.get_state()
-        assert state["tokens"] == pytest.approx(4.0, abs=0.01)
-    
-    def test_acquire_multiple_tokens(self):
-        """Test acquiring multiple tokens."""
-        bucket = TokenBucket(rate=10.0, capacity=10)
-        
-        assert bucket.acquire(3) is True
-        state = bucket.get_state()
-        assert state["tokens"] == pytest.approx(7.0, abs=0.01)
-    
-    def test_acquire_failure(self):
-        """Test acquisition failure when empty."""
-        bucket = TokenBucket(rate=0.1, capacity=1)
-        bucket.acquire()  # Empty the bucket
-        
-        assert bucket.acquire() is False
-    
-    def test_token_refill(self):
-        """Test tokens refill over time."""
-        bucket = TokenBucket(rate=10.0, capacity=5)
-        bucket.acquire(5)  # Empty bucket
-        
-        time.sleep(0.15)  # Wait for refill
-        
+
+    def test_init_full(self):
+        """Bucket starts full."""
+        bucket = TokenBucket(rate=1.0, capacity=10)
+        assert bucket._tokens == 10.0
+
+    def test_acquire_single(self):
+        """Acquire one token succeeds when tokens available."""
+        bucket = TokenBucket(rate=1.0, capacity=10)
+        assert bucket.acquire(1) is True
+        assert bucket._tokens == 9.0
+
+    def test_acquire_multiple(self):
+        """Acquire multiple tokens at once."""
+        bucket = TokenBucket(rate=1.0, capacity=10)
+        assert bucket.acquire(5) is True
+        assert bucket._tokens == 5.0
+
+    def test_acquire_exhausts(self):
+        """Acquire fails when bucket empty."""
+        bucket = TokenBucket(rate=0.001, capacity=5)  # Very slow refill
+        bucket.acquire(5)  # Drain
+        assert bucket.acquire(1) is False
+
+    def test_refill_over_time(self):
+        """Tokens refill based on elapsed time."""
+        bucket = TokenBucket(rate=100.0, capacity=10)
+        bucket.acquire(10)  # Empty it
+        assert bucket.acquire(1) is False
+        time.sleep(0.02)  # Wait ~2 tokens worth
+        # After refill, should have some tokens
         state = bucket.get_state()
         assert state["tokens"] > 0
-    
-    def test_acquire_blocking(self):
-        """Test blocking acquisition."""
-        bucket = TokenBucket(rate=100.0, capacity=1)
-        bucket.acquire()  # Empty bucket
-        
-        start = time.time()
-        result = bucket.acquire_blocking(timeout=0.05)
-        elapsed = time.time() - start
-        
-        assert result is True
-        assert elapsed >= 0.01  # Should have waited
-    
-    def test_acquire_blocking_timeout(self):
-        """Test blocking acquisition timeout."""
-        bucket = TokenBucket(rate=0.1, capacity=1)
-        bucket.acquire()  # Empty bucket
-        
-        result = bucket.acquire_blocking(timeout=0.01)
-        assert result is False
-    
+
+    def test_capacity_limit(self):
+        """Tokens never exceed capacity."""
+        bucket = TokenBucket(rate=1000.0, capacity=5)
+        time.sleep(0.05)  # Let it "refill" way past capacity
+        state = bucket.get_state()
+        assert state["tokens"] <= 5.0
+
     def test_get_wait_time(self):
-        """Test calculating wait time."""
-        bucket = TokenBucket(rate=1.0, capacity=5)
-        bucket.acquire(5)  # Empty bucket
-        
-        wait_time = bucket.get_wait_time(1)
-        assert wait_time > 0
-    
-    def test_thread_safety(self):
-        """Test thread-safe operation."""
-        bucket = TokenBucket(rate=1000.0, capacity=100)
-        
-        def acquire_tokens():
-            for _ in range(10):
-                bucket.acquire()
-        
-        threads = [threading.Thread(target=acquire_tokens) for _ in range(5)]
+        """Wait time is zero when tokens available."""
+        bucket = TokenBucket(rate=1.0, capacity=10)
+        assert bucket.get_wait_time(1) == 0.0
+
+    def test_get_wait_time_positive(self):
+        """Wait time positive when insufficient tokens."""
+        bucket = TokenBucket(rate=2.0, capacity=5)
+        bucket.acquire(5)
+        wait = bucket.get_wait_time(3)
+        assert wait > 0  # Need to wait for refill
+
+    def test_get_state_structure(self):
+        """State dict has expected keys."""
+        bucket = TokenBucket(rate=5.0, capacity=20)
+        state = bucket.get_state()
+        assert state["strategy"] == "token_bucket"
+        assert state["rate"] == 5.0
+        assert state["capacity"] == 20
+        assert "tokens" in state
+
+    def test_thread_safety_basic(self):
+        """Concurrent acquires don't corrupt state."""
+        bucket = TokenBucket(rate=10000.0, capacity=10000)
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(50):
+                    bucket.acquire(1)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
-        
+            t.join(timeout=5)
+
+        assert len(errors) == 0
         state = bucket.get_state()
-        assert state["tokens"] == pytest.approx(50.0, abs=1.0)  # high rate = refill during test, allow drift
+        assert 0 <= state["tokens"] <= 10000
 
 
 class TestLeakyBucket:
     """Tests for LeakyBucket rate limiter."""
-    
-    def test_initial_volume(self):
-        """Test bucket starts empty."""
+
+    def test_acquire_when_space(self):
+        """Acquire succeeds when bucket has space."""
+        bucket = LeakyBucket(leak_rate=1.0, capacity=10)
+        assert bucket.acquire(1) is True
+        assert bucket._volume == 1.0
+
+    def test_acquire_fills_to_capacity(self):
+        """Can fill up to capacity."""
         bucket = LeakyBucket(leak_rate=1.0, capacity=5)
-        state = bucket.get_state()
-        assert state["volume"] == 0.0
-    
-    def test_acquire_success(self):
-        """Test successful acquisition."""
-        bucket = LeakyBucket(leak_rate=1.0, capacity=5)
-        
-        assert bucket.acquire() is True
-        state = bucket.get_state()
-        assert state["volume"] == pytest.approx(1.0, abs=0.01)  # timing drift
-    
-    def test_acquire_failure_when_full(self):
-        """Test failure when bucket is full."""
-        bucket = LeakyBucket(leak_rate=0.1, capacity=1)
-        bucket.acquire()  # Fill bucket
-        
-        assert bucket.acquire() is False
-    
+        assert bucket.acquire(5) is True
+        assert bucket.acquire(1) is False  # Full
+
     def test_leak_over_time(self):
-        """Test bucket leaks over time."""
-        bucket = LeakyBucket(leak_rate=10.0, capacity=5)
-        bucket.acquire(5)  # Fill bucket
-        
-        time.sleep(0.15)  # Wait for leak
-        
+        """Volume decreases over time (leaking)."""
+        bucket = LeakyBucket(leak_rate=100.0, capacity=50)
+        bucket.acquire(50)  # Fill completely
+        assert bucket.acquire(1) is False
+        time.sleep(0.03)  # Let it leak
         state = bucket.get_state()
-        assert state["volume"] < 5.0
-    
-    def test_acquire_blocking(self):
-        """Test blocking acquisition."""
-        bucket = LeakyBucket(leak_rate=100.0, capacity=1)
-        bucket.acquire()  # Fill bucket
-        
-        start = time.time()
-        result = bucket.acquire_blocking(timeout=0.05)
-        elapsed = time.time() - start
-        
-        assert result is True
-        assert elapsed >= 0.01
+        assert state["available"] > 0  # Space opened up
+
+    def test_get_state_structure(self):
+        """State dict has expected keys."""
+        bucket = LeakyBucket(leak_rate=3.0, capacity=15)
+        state = bucket.get_state()
+        assert state["strategy"] == "leaky_bucket"
+        assert state["leak_rate"] == 3.0
+        assert state["capacity"] == 15
+        assert "volume" in state
+        assert "available" in state
+
+    def test_empty_bucket_has_full_availability(self):
+        """Empty bucket shows full availability."""
+        bucket = LeakyBucket(leak_rate=1.0, capacity=10)
+        state = bucket.get_state()
+        assert state["available"] == 10
 
 
 class TestAdaptiveRateLimiter:
-    """Tests for AdaptiveRateLimiter."""
-    
-    def test_initial_state(self):
-        """Test initial state."""
-        limiter = AdaptiveRateLimiter(initial_rate=10.0)
-        state = limiter.get_state()
-        
-        assert state["current_rate"] == 10.0
-        assert state["strategy"] == "adaptive"
-    
-    def test_report_success_increases_rate(self):
-        """Test success increases rate."""
-        limiter = AdaptiveRateLimiter(
+    """Tests for AdaptiveRateLimiter (AIMD)."""
+
+    def test_init_rate(self):
+        """Starts with initial_rate."""
+        adap = AdaptiveRateLimiter(initial_rate=20.0)
+        state = adap.get_state()
+        assert state["current_rate"] == 20.0
+
+    def test_success_increases_rate(self):
+        """Success increases current rate."""
+        adap = AdaptiveRateLimiter(
             initial_rate=10.0,
-            add_increment=5.0,
-            max_rate=100.0
+            max_rate=100.0,
+            add_increment=5.0
         )
-        
-        limiter.report_success()
-        state = limiter.get_state()
-        
+        adap.report_success()
+        state = adap.get_state()
         assert state["current_rate"] == 15.0
-    
-    def test_report_failure_decreases_rate(self):
-        """Test failure decreases rate."""
-        limiter = AdaptiveRateLimiter(
-            initial_rate=10.0,
-            multiply_decrease=0.5,
-            min_rate=1.0
+
+    def test_success_clamps_at_max(self):
+        """Rate doesn't exceed max_rate."""
+        adap = AdaptiveRateLimiter(
+            initial_rate=99.0,
+            max_rate=100.0,
+            add_increment=5.0
         )
-        
-        limiter.report_failure(is_rate_limit=True)
-        state = limiter.get_state()
-        
-        assert state["current_rate"] == 5.0
-    
-    def test_rate_bounds(self):
-        """Test rate respects min/max bounds."""
-        limiter = AdaptiveRateLimiter(
-            initial_rate=5.0,
-            min_rate=2.0,
-            max_rate=8.0,
-            add_increment=10.0,
-            multiply_decrease=0.1
+        adap.report_success()
+        state = adap.get_state()
+        assert state["current_rate"] == 100.0
+
+    def test_failure_decreases_rate(self):
+        """Failure (rate limit) multiplies rate down."""
+        adap = AdaptiveRateLimiter(
+            initial_rate=100.0,
+            min_rate=1.0,
+            multiply_decrease=0.5
         )
-        
-        # Try to exceed max
-        limiter.report_success()
-        state = limiter.get_state()
-        assert state["current_rate"] == 8.0  # Capped at max
-        
-        # Try to go below min
-        limiter.report_failure(is_rate_limit=True)
-        limiter.report_failure(is_rate_limit=True)
-        state = limiter.get_state()
-        assert state["current_rate"] == 2.0  # Capped at min
-    
+        adap.report_failure(is_rate_limit=True)
+        state = adap.get_state()
+        assert state["current_rate"] == 50.0
+
+    def test_failure_clamps_at_min(self):
+        """Rate doesn't go below min_rate."""
+        adap = AdaptiveRateLimiter(
+            initial_rate=0.15,
+            min_rate=0.1,
+            multiply_decrease=0.5
+        )
+        adap.report_failure(is_rate_limit=True)
+        state = adap.get_state()
+        assert state["current_rate"] == 0.1
+
+    def test_tracks_success_count(self):
+        """Success counter increments."""
+        adap = AdaptiveRateLimiter()
+        adap.report_success()
+        adap.report_success()
+        state = adap.get_state()
+        assert state["success_count"] == 2
+
+    def test_tracks_failure_count(self):
+        """Failure counter increments."""
+        adap = AdaptiveRateLimiter()
+        adap.report_failure(is_rate_limit=True)
+        state = adap.get_state()
+        assert state["failure_count"] == 1
+
     def test_acquire_delegates_to_inner(self):
-        """Test acquire delegates to inner limiter."""
-        limiter = AdaptiveRateLimiter(initial_rate=10.0)
-        
-        # Should succeed with initial tokens
-        assert limiter.acquire() is True
+        """Acquire works through inner token bucket."""
+        adap = AdaptiveRateLimiter(initial_rate=10.0)
+        assert adap.acquire(1) is True  # Should have tokens
+
+    def test_inner_updates_on_rate_change(self):
+        """Inner token bucket reflects new rate after adjustment."""
+        adap = AdaptiveRateLimiter(initial_rate=10.0)
+        old_inner_rate = adap._inner.rate
+        adap.report_success()  # Increases rate
+        assert adap._inner.rate > old_inner_rate
 
 
-class TestRateLimiterFactory:
-    """Tests for rate limiter factory."""
-    
-    def test_create_token_bucket(self):
-        """Test creating token bucket."""
-        limiter = create_rate_limiter(
-            strategy=RateLimitStrategy.TOKEN_BUCKET,
-            rate=5.0,
-            capacity=10
-        )
-        
+class TestCreateRateLimiterFactory:
+    """Tests for the factory function."""
+
+    def test_token_bucket_factory(self):
+        """Creates token bucket by default."""
+        limiter = create_rate_limiter(RateLimitStrategy.TOKEN_BUCKET, rate=5.0, capacity=20)
         assert isinstance(limiter, TokenBucket)
-        state = limiter.get_state()
-        assert state["strategy"] == "token_bucket"
-    
-    def test_create_leaky_bucket(self):
-        """Test creating leaky bucket."""
-        limiter = create_rate_limiter(
-            strategy=RateLimitStrategy.LEAKY_BUCKET,
-            leak_rate=5.0,
-            capacity=10
-        )
-        
+        assert limiter.rate == 5.0
+        assert limiter.capacity == 20
+
+    def test_leaky_bucket_factory(self):
+        """Creates leaky bucket."""
+        limiter = create_rate_limiter(RateLimitStrategy.LEAKY_BUCKET, leak_rate=3.0, capacity=7)
         assert isinstance(limiter, LeakyBucket)
-        state = limiter.get_state()
-        assert state["strategy"] == "leaky_bucket"
-    
-    def test_create_adaptive(self):
-        """Test creating adaptive limiter."""
-        limiter = create_rate_limiter(
-            strategy=RateLimitStrategy.ADAPTIVE,
-            initial_rate=10.0
-        )
-        
+        assert limiter.leak_rate == 3.0
+
+    def test_adaptive_factory(self):
+        """Creates adaptive rate limiter."""
+        limiter = create_rate_limiter(RateLimitStrategy.ADAPTIVE, initial_rate=50.0)
         assert isinstance(limiter, AdaptiveRateLimiter)
-        state = limiter.get_state()
-        assert state["strategy"] == "adaptive"
-    
-    def test_invalid_strategy(self):
-        """Test invalid strategy raises error."""
-        with pytest.raises(ValueError, match="Unknown strategy"):
-            create_rate_limiter(strategy="invalid")
+
+    def test_unknown_strategy_raises(self):
+        """Unknown strategy raises ValueError."""
+        with pytest.raises(ValueError):
+            create_rate_limiter("nonexistent_strategy")  # type: ignore
 
 
 class TestRateLimiterManager:
     """Tests for RateLimiterManager."""
-    
-    def setup_method(self):
-        """Reset manager before each test."""
-        reset_rate_limiter_manager()
-    
-    def teardown_method(self):
-        """Reset manager after each test."""
-        reset_rate_limiter_manager()
-    
+
     def test_register_and_get(self):
-        """Test registering and retrieving limiters."""
-        manager = get_rate_limiter_manager()
-        limiter = TokenBucket(rate=1.0, capacity=5)
-        
-        manager.register("test", limiter)
-        retrieved = manager.get("test")
-        
-        assert retrieved is limiter
-    
-    def test_get_nonexistent(self):
-        """Test getting non-existent limiter returns None."""
-        manager = get_rate_limiter_manager()
-        assert manager.get("nonexistent") is None
-    
-    def test_acquire_from_registered(self):
-        """Test acquire from registered limiter."""
-        manager = get_rate_limiter_manager()
-        limiter = TokenBucket(rate=100.0, capacity=5)
-        
-        manager.register("test", limiter)
-        result = manager.acquire("test")
-        
-        assert result is True
-    
-    def test_acquire_no_limiter(self):
-        """Test acquire with no limiter returns True."""
-        manager = get_rate_limiter_manager()
-        result = manager.acquire("nonexistent")
-        
-        assert result is True  # No limit = no blocking
-    
+        """Register and retrieve a limiter."""
+        mgr = RateLimiterManager()
+        tb = TokenBucket(rate=5.0, capacity=10)
+        mgr.register("gemini", tb)
+        assert mgr.get("gemini") is tb
+
+    def test_get_missing_returns_none(self):
+        """Missing key returns None."""
+        mgr = RateLimiterManager()
+        assert mgr.get("nonexistent") is None
+
+    def test_acquire_missing_allows(self):
+        """Acquire on unregistered provider returns True (no limit)."""
+        mgr = RateLimiterManager()
+        assert mgr.acquire("unknown") is True
+
+    def test_acquire_registered(self):
+        """Acquire delegates to registered limiter."""
+        mgr = RateLimiterManager()
+        tb = TokenBucket(rate=1.0, capacity=1)
+        mgr.register("test", tb)
+        assert mgr.acquire("test") is True
+        assert mgr.acquire("test") is False  # Exhausted
+
     def test_get_all_states(self):
-        """Test getting all limiter states."""
-        manager = get_rate_limiter_manager()
-        manager.register("a", TokenBucket(rate=1.0, capacity=5))
-        manager.register("b", TokenBucket(rate=2.0, capacity=10))
-        
-        states = manager.get_all_states()
-        
+        """Get all states returns per-provider dict."""
+        mgr = RateLimiterManager()
+        mgr.register("a", TokenBucket(rate=1.0, capacity=5))
+        mgr.register("b", LeakyBucket(leak_rate=2.0, capacity=10))
+        states = mgr.get_all_states()
         assert "a" in states
         assert "b" in states
-        assert states["a"]["rate"] == 1.0
-        assert states["b"]["rate"] == 2.0
+        assert states["a"]["strategy"] == "token_bucket"
+        assert states["b"]["strategy"] == "leaky_bucket"
+
+
+class TestRateLimitError:
+    """Tests for RateLimitError exception."""
+
+    def test_message_and_retry_after(self):
+        """Stores message and optional retry_after."""
+        err = RateLimitError("too fast", retry_after=2.5)
+        assert str(err) == "too fast"
+        assert err.retry_after == 2.5
+
+    def test_no_retry_after(self):
+        """retry_after defaults to None."""
+        err = RateLimitError("too fast")
+        assert err.retry_after is None

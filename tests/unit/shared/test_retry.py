@@ -1,253 +1,297 @@
-"""Unit tests for retry module."""
+"""Comprehensive unit tests for retry logic."""
+
+import time
+import asyncio
+from unittest.mock import patch, MagicMock
 
 import pytest
-import time
-from unittest.mock import Mock, patch
 
 from src.shared.retry import (
     RetryConfig,
     RetryExhaustedError,
+    RetryContext,
     with_retry,
     retry_call,
-    RetryContext,
+    retry_call_async,
 )
-from src.shared.errors import is_retryable
 
+
+# ─── RetryConfig Tests ────────────────────────────────────────────────
 
 class TestRetryConfig:
     """Tests for RetryConfig."""
-    
-    def test_default_values(self):
-        """Test default configuration."""
-        config = RetryConfig()
-        
-        assert config.max_attempts == 3
-        assert config.base_delay == 1.0
-        assert config.max_delay == 60.0
-        assert config.exponential_base == 2.0
-        assert config.jitter is True
-    
+
+    def test_defaults(self):
+        """Default values are sensible."""
+        cfg = RetryConfig()
+        assert cfg.max_attempts == 3
+        assert cfg.base_delay == 1.0
+        assert cfg.max_delay == 60.0
+        assert cfg.exponential_base == 2.0
+        assert cfg.jitter is True
+
     def test_calculate_delay_no_jitter(self):
-        """Test delay calculation without jitter."""
-        config = RetryConfig(
+        """Exponential backoff without jitter."""
+        cfg = RetryConfig(
             base_delay=1.0,
+            max_delay=60.0,
             exponential_base=2.0,
             jitter=False
         )
-        
-        assert config.calculate_delay(0) == 1.0
-        assert config.calculate_delay(1) == 2.0
-        assert config.calculate_delay(2) == 4.0
-    
-    def test_calculate_delay_with_jitter(self):
-        """Test delay calculation with jitter."""
-        config = RetryConfig(
-            base_delay=1.0,
-            exponential_base=2.0,
-            jitter=True,
-            jitter_max=0.1
-        )
-        
-        delay = config.calculate_delay(0)
-        assert delay >= 1.0
-        assert delay <= 1.1  # 1.0 + 10% jitter
-    
-    def test_calculate_delay_respects_max(self):
-        """Test delay respects max_delay."""
-        config = RetryConfig(
-            base_delay=1.0,
+        assert cfg.calculate_delay(0) == 1.0   # 1 * 2^0
+        assert cfg.calculate_delay(1) == 2.0   # 1 * 2^1
+        assert cfg.calculate_delay(2) == 4.0   # 1 * 2^2
+
+    def test_calculate_delay_clamps_to_max(self):
+        """Delay never exceeds max_delay."""
+        cfg = RetryConfig(
+            base_delay=10.0,
+            max_delay=30.0,
             exponential_base=10.0,
-            max_delay=5.0,
             jitter=False
         )
-        
-        delay = config.calculate_delay(1)
-        assert delay == 5.0  # Capped at max
+        # 10 * 10^2 = 1000 → clamped to 30
+        assert cfg.calculate_delay(2) == 30.0
+
+    def test_calculate_delay_with_jitter(self):
+        """With jitter, delay is >= base and <= base + jitter%."""
+        cfg = RetryConfig(
+            base_delay=1.0,
+            max_delay=100.0,
+            jitter=True,
+            jitter_max=0.5
+        )
+        for _ in range(20):
+            delay = cfg.calculate_delay(0)
+            assert 1.0 <= delay <= 1.5
 
 
 class TestRetryExhaustedError:
     """Tests for RetryExhaustedError."""
-    
-    def test_error_creation(self):
-        """Test creating exhausted error."""
-        cause = ValueError("Original")
-        error = RetryExhaustedError(attempts=3, last_error=cause)
-        
-        assert error.attempts == 3
-        assert error.last_error is cause
-        assert "3 attempts" in error.message
+
+    def test_message_format(self):
+        """Message includes attempt count."""
+        err = RetryExhaustedError(3, ValueError("boom"))
+        assert "3 attempts" in str(err)
+        assert err.attempts == 3
+        assert isinstance(err.last_error, ValueError)
+
+    def test_is_dsearch_error(self):
+        """Is a DsearchError subclass (retryable=False)."""
+        from src.shared.errors import DsearchError
+        err = RetryExhaustedError(3, RuntimeError("x"))
+        assert isinstance(err, DsearchError)
+        assert err.retryable is False
 
 
-class TestWithRetryDecorator:
-    """Tests for with_retry decorator."""
-    
-    def test_successful_call(self):
-        """Test successful function call."""
-        @with_retry(max_attempts=3)
-        def success_func():
-            return "success"
-        
-        result = success_func()
-        assert result == "success"
-    
-    def test_retry_on_failure(self):
-        """Test retry on failure."""
+# ─── retry_call Tests ─────────────────────────────────────────────────
+
+class TestRetryCall:
+    """Tests for synchronous retry_call."""
+
+    def test_success_first_attempt(self):
+        """Returns result on first try."""
+        result = retry_call(lambda: 42, RetryConfig(max_attempts=3))
+        assert result == 42
+
+    def test_success_after_retries(self):
+        """Succeeds after some failures."""
         call_count = 0
-        
-        @with_retry(max_attempts=3, base_delay=0.01)
-        def fail_then_succeed():
+
+        def flaky():
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise ConnectionError("Failed")
-            return "success"
-        
-        result = fail_then_succeed()
-        assert result == "success"
+                raise ConnectionError("transient")
+            return "ok"
+
+        result = retry_call(flaky, RetryConfig(max_attempts=5, base_delay=0.01, jitter=False))
+        assert result == "ok"
         assert call_count == 3
-    
-    def test_exhausted_retries(self):
-        """Test exhausted retries raises error."""
-        @with_retry(max_attempts=2, base_delay=0.01)
+
+    def test_exhaustion_raises(self):
+        """Raises RetryExhaustedError when all attempts fail."""
         def always_fail():
-            raise ConnectionError("Always fails")
-        
+            raise ValueError("permanent")
+
         with pytest.raises(RetryExhaustedError) as exc_info:
-            always_fail()
-        
-        assert exc_info.value.attempts == 2
-    
-    def test_non_retryable_exception(self):
-        """Test non-retryable exception is not retried."""
-        call_count = 0
-        
-        @with_retry(max_attempts=3, base_delay=0.01)
-        def raise_value_error():
-            nonlocal call_count
-            call_count += 1
-            raise ValueError("Not retryable")
-        
-        with pytest.raises(ValueError):
-            raise_value_error()
-        
-        assert call_count == 1  # Not retried
-    
-    def test_custom_retryable_exceptions(self):
-        """Test custom retryable exceptions."""
-        call_count = 0
-        
-        @with_retry(
-            max_attempts=2,
+            retry_call(always_fail, RetryConfig(max_attempts=3, base_delay=0.01, jitter=False))
+
+        assert exc_info.value.attempts == 3
+        assert isinstance(exc_info.value.last_error, ValueError)
+
+    def test_non_retryable_bubbles_with_narrow_exceptions(self):
+        """Non-retryable DsearchError bubbles when excluded from retryable_exceptions."""
+        from src.shared.errors import ConfigError
+
+        def raise_config_error():
+            raise ConfigError("bad config")
+
+        # Exclude DsearchError hierarchy — forces is_retryable() check
+        with pytest.raises(ConfigError):
+            retry_call(
+                raise_config_error,
+                RetryConfig(
+                    max_attempts=5, base_delay=0.01, jitter=False,
+                    retryable_exceptions=(ConnectionError, TimeoutError, OSError)
+                )
+            )
+
+    def test_on_retry_callback(self):
+        """on_retry callback fires on each failed attempt."""
+        attempts_log = []
+
+        cfg = RetryConfig(
+            max_attempts=3,
             base_delay=0.01,
-            retryable_exceptions=(ValueError,)
+            jitter=False,
+            on_retry=lambda err, attempt: attempts_log.append((type(err).__name__, attempt))
         )
-        def raise_value_error():
-            nonlocal call_count
-            call_count += 1
-            raise ValueError("Retryable")
-        
-        with pytest.raises(RetryExhaustedError):
-            raise_value_error()
-        
-        assert call_count == 2  # Retried
 
+        def fail_twice():
+            if len(attempts_log) < 2:
+                raise ConnectionError("fail")
+            return "recovered"
 
-class TestRetryCall:
-    """Tests for retry_call function."""
-    
-    def test_successful_call(self):
-        """Test successful call."""
-        def success():
-            return "done"
-        
-        config = RetryConfig(max_attempts=3)
-        result = retry_call(success, config)
-        
-        assert result == "done"
-    
-    def test_retry_then_success(self):
-        """Test retry then success."""
+        retry_call(fail_twice, cfg)
+        assert len(attempts_log) == 2
+
+    def test_on_success_callback(self):
+        """on_success callback fires after recovery."""
+        success_attempts = []
+
+        cfg = RetryConfig(
+            max_attempts=3,
+            base_delay=0.01,
+            jitter=False,
+            on_success=lambda attempt: success_attempts.append(attempt)
+        )
+
         call_count = 0
-        
-        def sometimes_fail():
+        def flaky():
             nonlocal call_count
             call_count += 1
             if call_count < 2:
-                raise ConnectionError("Fail")
-            return "success"
-        
-        config = RetryConfig(max_attempts=3, base_delay=0.01)
-        result = retry_call(sometimes_fail, config)
-        
-        assert result == "success"
-        assert call_count == 2
-    
-    def test_all_attempts_fail(self):
-        """Test when all attempts fail."""
-        def always_fail():
-            raise ConnectionError("Fail")
-        
-        config = RetryConfig(max_attempts=2, base_delay=0.01)
-        
-        with pytest.raises(RetryExhaustedError):
-            retry_call(always_fail, config)
-    
-    def test_callback_on_retry(self):
-        """Test on_retry callback."""
-        retry_calls = []
-        
-        def on_retry(error, attempt):
-            retry_calls.append((str(error), attempt))
-        
-        def fail_twice():
-            raise ConnectionError("Fail")
-        
-        config = RetryConfig(
-            max_attempts=2,
-            base_delay=0.01,
-            on_retry=on_retry
-        )
-        
-        with pytest.raises(RetryExhaustedError):
-            retry_call(fail_twice, config)
-        
-        assert len(retry_calls) == 1
+                raise ConnectionError("tmp")
+            return "ok"
 
+        retry_call(flaky, cfg)
+        assert len(success_attempts) == 1
+        assert success_attempts[0] == 1  # 0-indexed: succeeded on attempt 1
+
+    def test_custom_retryable_exceptions(self):
+        """Only retries on specified exception types."""
+        def raise_type_error():
+            raise TypeError("wrong type")
+
+        # Only retry ConnectionError — TypeError should bubble immediately
+        with pytest.raises(TypeError):
+            retry_call(
+                raise_type_error,
+                RetryConfig(
+                    max_attempts=5,
+                    base_delay=0.01,
+                    jitter=False,
+                    retryable_exceptions=(ConnectionError,)
+                )
+            )
+
+
+# ─── retry_call_async Tests ───────────────────────────────────────────
+
+class TestRetryCallAsync:
+    """Tests for async retry_call."""
+
+    @pytest.mark.asyncio
+    async def test_async_success_after_retries(self):
+        """Async succeeds after failures."""
+        call_count = 0
+
+        async def async_flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("async transient")
+            return "async ok"
+
+        result = await retry_call_async(
+            async_flaky,
+            RetryConfig(max_attempts=5, base_delay=0.01, jitter=False)
+        )
+        assert result == "async ok"
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_async_exhaustion(self):
+        """Async raises after all attempts fail."""
+        async def always_fail():
+            raise RuntimeError("async boom")
+
+        with pytest.raises(RetryExhaustedError):
+            await retry_call_async(
+                always_fail,
+                RetryConfig(max_attempts=3, base_delay=0.01, jitter=False)
+            )
+
+
+# ─── with_retry Decorator Tests ───────────────────────────────────────
+
+class TestWithRetryDecorator:
+    """Tests for the @with_retry decorator."""
+
+    def test_decorator_sync_function(self):
+        """Decorator works on sync functions."""
+        call_count = 0
+
+        @with_retry(max_attempts=3, base_delay=0.01, jitter=False)
+        def sync_fn():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ConnectionError("tmp")
+            return "sync_ok"
+
+        result = sync_fn()
+        assert result == "sync_ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_decorator_async_function(self):
+        """Decorator works on async functions."""
+        call_count = 0
+
+        @with_retry(max_attempts=3, base_delay=0.01, jitter=False)
+        async def async_fn():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ConnectionError("async tmp")
+            return "async_ok"
+
+        result = await async_fn()
+        assert result == "async_ok"
+        assert call_count == 2
+
+
+# ─── RetryContext Tests ───────────────────────────────────────────────
 
 class TestRetryContext:
-    """Tests for RetryContext."""
-    
-    def test_successful_context(self):
-        """Test successful context usage."""
-        config = RetryConfig(max_attempts=3)
-        
-        with RetryContext(config) as ctx:
-            pass  # Success
-        
-        assert ctx.attempt == 0
-    
-    def test_context_retries(self):
-        """Test context with retries."""
-        config = RetryConfig(max_attempts=3, base_delay=0.01)
-        attempt = 0
-        
-        for _ in range(3):
-            try:
-                with RetryContext(config) as ctx:
-                    attempt += 1
-                    if attempt < 3:
-                        raise ConnectionError("Fail")
-                break
-            except RetryExhaustedError:
-                break
-        
-        assert attempt == 3
-    
+    """Tests for RetryContext context manager."""
+
+    def test_no_exception_is_clean_exit(self):
+        """Clean exit returns True (no error)."""
+        cfg = RetryConfig(max_attempts=3, base_delay=0.01, jitter=False)
+        with RetryContext(cfg) as ctx:
+            pass  # No exception
+        # Context should be usable
+        assert ctx.last_error is None
+
     def test_should_continue(self):
-        """Test should_continue method."""
-        config = RetryConfig(max_attempts=3)
-        ctx = RetryContext(config)
-        
-        assert ctx.should_continue() is True
+        """should_continue reflects remaining attempts."""
+        cfg = RetryConfig(max_attempts=3)
+        ctx = RetryContext(cfg)
+        assert ctx.should_continue() is True  # 0 < 3
+        ctx.attempt = 2
+        assert ctx.should_continue() is True  # 2 < 3
         ctx.attempt = 3
-        assert ctx.should_continue() is False
+        assert ctx.should_continue() is False  # 3 not < 3

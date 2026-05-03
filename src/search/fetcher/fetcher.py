@@ -70,6 +70,8 @@ class URLFetcher:
         self._session: Optional[aiohttp.ClientSession] = None
         self._connector: Optional[aiohttp.TCPConnector] = None
         self._semaphore: Optional[asyncio.Semaphore] = None
+        self._robots_checker: Optional["RobotsChecker"] = None
+        self._respect_robots: bool = True
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
@@ -113,6 +115,24 @@ class URLFetcher:
                 status=0,
                 error="Invalid URL"
             )
+
+        # Check robots.txt before fetching
+        if self._respect_robots:
+            try:
+                from .robots import RobotsChecker
+                if self._robots_checker is None:
+                    self._robots_checker = RobotsChecker(
+                        user_agent=self.headers.get("User-Agent", "OpenDsearch")
+                    )
+                if not await self._robots_checker.is_allowed(url):
+                    return FetchResult(
+                        url=url,
+                        status=403,
+                        error="Blocked by robots.txt"
+                    )
+            except Exception:
+                # Fail open — don't block fetches if robots check fails
+                pass
 
         try:
             session = await self._get_session()
@@ -236,6 +256,10 @@ class URLFetcher:
         if self._connector:
             await self._connector.close()
             self._connector = None
+
+        if self._robots_checker:
+            await self._robots_checker.close()
+            self._robots_checker = None
 
         self._semaphore = None
     

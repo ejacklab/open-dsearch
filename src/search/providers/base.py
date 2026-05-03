@@ -25,7 +25,7 @@ class SearchResult:
     score: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     fetched_content: Optional[str] = None
-    timestamp: Optional[datetime] = field(default_factory=datetime.now)
+    timestamp: Optional[datetime] = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def __post_init__(self):
         """Ensure timestamp is set."""
