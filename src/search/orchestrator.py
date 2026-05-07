@@ -31,6 +31,7 @@ class SearchOptions:
     deduplicate: bool = True
     expand_queries: bool = True
     num_query_variations: int = 3
+    rescore_after_enrichment: bool = True
 
 
 @dataclass
@@ -209,6 +210,12 @@ class SearchOrchestrator:
                 max_results=options.fetch_max_results,
                 max_concurrent=options.fetch_max_concurrent
             )
+            
+            # Re-score using fetched content for richer ranking
+            if options.rescore_after_enrichment:
+                all_results = self.scorer.rescore_with_content(
+                    all_results, options.query
+                )
         
         # Cache results
         if options.use_cache and self.cache and all_results and cache_key:

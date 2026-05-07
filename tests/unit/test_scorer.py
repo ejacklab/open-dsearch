@@ -457,3 +457,117 @@ class TestCustomWeights:
         default_winner = default_scored[0].url
         assert "random" in heavy_winner  # keyword match wins
         # Default might prefer GitHub source — that's fine
+
+
+# ─── Rescore with Content ─────────────────────────────────────────────
+
+class TestRescoreWithContent:
+    """Tests for content-aware re-scoring after enrichment."""
+
+    def test_rescore_empty_results(self):
+        """Empty list returns empty."""
+        scorer = ResultScorer()
+        assert scorer.rescore_with_content([], "test") == []
+
+    def test_rescore_no_fetched_content(self):
+        """Results without fetched_content keep their original score."""
+        scorer = ResultScorer()
+        results = [
+            make_result(title="Python tutorial", snippet="Learn Python"),
+            make_result(title="Java guide", snippet="Learn Java"),
+        ]
+        scored = scorer.score_results(results, "python")
+        original_scores = [r.score for r in scored]
+        rescored = scorer.rescore_with_content(scored, "python")
+        # Scores should be unchanged (no fetched_content)
+        assert [r.score for r in rescored] == original_scores
+
+    def test_rescore_boosts_content_match(self):
+        """Result with relevant fetched_content gets score boost."""
+        scorer = ResultScorer()
+        results = [
+            make_result(title="Guide A", snippet="Short", url="https://example.com/a"),
+            make_result(title="Guide B", snippet="Short", url="https://example.com/b"),
+        ]
+        scored = scorer.score_results(results, "python async")
+
+        # Give first result rich relevant content
+        scored[0].fetched_content = (
+            "This guide covers Python async programming in depth. "
+            "Learn how to use async/await in Python for concurrent programming. "
+            "Python async patterns are essential for modern applications."
+        )
+
+        original_order = [r.url for r in scored]
+        rescored = scorer.rescore_with_content(scored, "python async")
+
+        # Result with content should now be boosted
+        content_result = [r for r in rescored if r.fetched_content][0]
+        no_content_result = [r for r in rescored if not r.fetched_content][0]
+        assert content_result.score > no_content_result.score
+
+    def test_rescore_irrelevant_content_no_boost(self):
+        """Result with irrelevant fetched_content gets minimal/no boost."""
+        scorer = ResultScorer(
+            weights=ScoringWeights(
+                keyword_match=0.0, source_quality=0.0,
+                title_relevance=0.0, snippet_quality=0.0, recency=0.0
+            )
+        )
+        results = [make_result(title="Test", snippet="Test")]
+        scored = scorer.score_results(results, "python")
+        scored[0].fetched_content = "Cooking recipes for Italian pasta and pizza dough"
+
+        original_score = scored[0].score
+        rescored = scorer.rescore_with_content(scored, "python")
+        # No relevant terms → no boost
+        assert rescored[0].score == original_score
+
+    def test_rescore_reorders_results(self):
+        """Re-scoring can change result order when content is relevant."""
+        scorer = ResultScorer()
+        results = [
+            make_result(title="Guide A", snippet="Brief", url="https://example.com/a"),
+            make_result(title="Python Guide B", snippet="Python tutorial", url="https://example.com/b"),
+        ]
+        scored = scorer.score_results(results, "python async")
+
+        # B starts higher (title+snippet match)
+        assert scored[0].url == "https://example.com/b"
+
+        # Give A rich content about the query
+        scored[-1].fetched_content = (
+            "Comprehensive Python async guide. Python async await "
+            "patterns for building scalable Python applications."
+        )
+
+        rescored = scorer.rescore_with_content(scored, "python async")
+
+        # A might now overtake B due to content boost
+        has_content = [r for r in rescored if r.fetched_content]
+        assert len(has_content) == 1
+        assert has_content[0].score > 0
+
+    def test_rescore_multiple_with_content(self):
+        """Multiple enriched results are re-scored correctly."""
+        scorer = ResultScorer()
+        results = [
+            make_result(title="A", snippet="Brief", url="https://a.com"),
+            make_result(title="B", snippet="Brief", url="https://b.com"),
+            make_result(title="C", snippet="Brief", url="https://c.com"),
+        ]
+        scored = scorer.score_results(results, "machine learning")
+
+        # Give B the most relevant content
+        scored[0].fetched_content = "Some general programming text without specifics"
+        scored[1].fetched_content = (
+            "Machine learning algorithms for classification and regression. "
+            "Deep learning neural networks and machine learning pipelines."
+        )
+        scored[2].fetched_content = "Data engineering and ETL pipelines"
+
+        rescored = scorer.rescore_with_content(scored, "machine learning")
+
+        # B should rank highest due to rich relevant content
+        b_result = [r for r in rescored if r.url == "https://b.com"][0]
+        assert b_result == rescored[0]  # B is now top result

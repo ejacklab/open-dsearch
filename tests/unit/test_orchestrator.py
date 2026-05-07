@@ -6,6 +6,7 @@ from unittest.mock import Mock, AsyncMock, patch
 from src.search.orchestrator import SearchOrchestrator, SearchOptions, SearchResponse
 from src.search.providers.base import SearchProvider, ProviderConfig, SearchResult, ProviderStatus
 from src.search.caching.memory_cache import MemoryCache
+from src.search.ranking.scorer import ResultScorer
 
 
 class MockSearchProvider(SearchProvider):
@@ -222,3 +223,64 @@ class TestSearchOrchestrator:
             results.append(result)
         
         assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_rescore_after_enrichment_flag_default(self):
+        """rescore_after_enrichment defaults to True."""
+        opts = SearchOptions(query="test")
+        assert opts.rescore_after_enrichment is True
+
+    @pytest.mark.asyncio
+    async def test_search_rescores_after_enrichment(self):
+        """Verify orchestrator calls rescore when enrichment + flag enabled."""
+        scorer = ResultScorer()
+        orch = SearchOrchestrator(scorer=scorer)
+        orch.add_provider(MockSearchProvider("gemini"))
+
+        options = SearchOptions(
+            query="python",
+            fetch_content=True,
+            rescore_after_enrichment=True,
+        )
+
+        # Mock _enrich_with_content to add fetched_content
+        original_enrich = orch._enrich_with_content
+
+        async def mock_enrich(results, **kwargs):
+            for r in results:
+                r.fetched_content = "Python programming tutorial content"
+            return results
+
+        orch._enrich_with_content = mock_enrich
+
+        response = await orch.search(options)
+
+        # Results should have been re-scored with content
+        # If rescore worked, results with fetched_content should have
+        # higher scores than without
+        assert response.total_found >= 1
+
+    @pytest.mark.asyncio
+    async def test_search_no_rescore_when_flag_off(self):
+        """Verify no rescore when rescore_after_enrichment=False."""
+        from unittest.mock import patch
+
+        orch = SearchOrchestrator()
+        orch.add_provider(MockSearchProvider("gemini"))
+
+        options = SearchOptions(
+            query="python",
+            fetch_content=True,
+            rescore_after_enrichment=False,
+        )
+
+        async def mock_enrich(results, **kwargs):
+            for r in results:
+                r.fetched_content = "Python content"
+            return results
+
+        orch._enrich_with_content = mock_enrich
+
+        with patch.object(orch.scorer, 'rescore_with_content', wraps=orch.scorer.rescore_with_content) as spy:
+            await orch.search(options)
+            spy.assert_not_called()

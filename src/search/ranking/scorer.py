@@ -16,6 +16,7 @@ class ScoringWeights:
     title_relevance: float = 1.5
     snippet_quality: float = 0.5
     recency: float = 0.3
+    content_relevance: float = 1.2
 
 
 class ResultScorer:
@@ -81,6 +82,43 @@ class ResultScorer:
         # Sort by score descending
         return sorted(results, key=lambda r: r.score, reverse=True)
     
+    def rescore_with_content(
+        self,
+        results: List[SearchResult],
+        query: str,
+        query_terms: Optional[List[str]] = None
+    ) -> List[SearchResult]:
+        """
+        Re-score results using fetched content for richer keyword matching.
+        
+        This should be called after content enrichment (URL fetching) to
+        incorporate the full page content into scoring. Results without
+        fetched_content keep their existing score.
+        
+        Args:
+            results: Search results (already scored, some with fetched_content)
+            query: Original query
+            query_terms: Optional pre-tokenized query terms
+            
+        Returns:
+            Results re-sorted by updated scores
+        """
+        if not results:
+            return []
+        
+        if query_terms is None:
+            query_terms = self._tokenize(query)
+        
+        for result in results:
+            if result.fetched_content:
+                # Add content relevance bonus on top of existing score
+                content_score = self._score_content_relevance(
+                    result.fetched_content, query_terms
+                )
+                result.score += content_score * self.weights.content_relevance
+        
+        return sorted(results, key=lambda r: r.score, reverse=True)
+    
     def _calculate_score(
         self,
         result: SearchResult,
@@ -114,6 +152,34 @@ class ResultScorer:
             score += recency_score * self.weights.recency
         
         return round(score, 2)
+    
+    def _score_content_relevance(
+        self,
+        content: str,
+        query_terms: List[str]
+    ) -> float:
+        """
+        Score fetched content relevance against query terms.
+        
+        Uses TF-based scoring: how many query terms appear in the
+        content, weighted by term frequency to reward repeated mentions.
+        """
+        if not content or not query_terms:
+            return 0.0
+        
+        content_lower = content.lower()
+        total_score = 0.0
+        
+        for term in query_terms:
+            count = content_lower.count(term)
+            if count > 0:
+                # Logarithmic scaling: first mention is worth most,
+                # repeated mentions add diminishing returns
+                import math
+                total_score += 1.0 + math.log1p(min(count - 1, 10))
+        
+        # Normalize by number of query terms (0.0 to ~1.0+)
+        return total_score / len(query_terms)
     
     def _tokenize(self, text: str) -> List[str]:
         """Tokenize text into search terms."""
