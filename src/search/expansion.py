@@ -220,7 +220,6 @@ class QueryExpander:
         # Remove question mark
         if query.endswith("?"):
             expansions.add(query[:-1])
-            expansions.add(query[:-1])
         
         return expansions
     
